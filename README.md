@@ -67,20 +67,40 @@ chmod +x run.sh
 
 ---
 
-## 🌐 Live Deployment Guide
+## 🌐 Step-by-Step Production Hosting Guide
 
-### 1. Frontend (Vercel / Netlify)
-- Set root directory: `frontend`
-- Build command: `npm run build`
-- Output directory: `dist`
-- Environment Variable:
-  - `VITE_API_URL`: URL of your live FastAPI backend (e.g. `https://api.yourdomain.com`)
+### 1. Deploying Backend to Render (https://render.com)
+1. Push this repository to your GitHub.
+2. Sign in to **Render** and click **New +** -> **Web Service**.
+3. Connect your GitHub repository.
+4. Configure service settings:
+   - **Name**: `jewellery-erp-backend`
+   - **Root Directory**: `backend`
+   - **Environment**: `Python 3`
+   - **Build Command**: `pip install -r requirements.txt`
+   - **Start Command**: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+5. Under **Environment Variables**, add the following:
+   - `DATABASE_URL`: Your Neon PostgreSQL connection string
+   - `SECRET_KEY`: `9dd1388bd86383719986c98409402e770897273bbb6d48122730c3d6e84e5574`
+   - `DEFAULT_ADMIN_PASSWORD`: `admin123`
+   - `IMAGEKIT_PUBLIC_KEY`: `public_Trj6QHIfE5icULrligCD5lRQf3o=`
+   - `IMAGEKIT_PRIVATE_KEY`: `private_c0UlgoVanFqKvHhb8p1vPZM2Xvw=`
+   - `PYTHON_VERSION`: `3.11.9`
+6. Click **Create Web Service**.
+7. Once deployed, copy your Render URL (e.g., `https://jewellery-erp-backend.onrender.com`).
+   - You can test it by opening `https://jewellery-erp-backend.onrender.com/` in your browser. It will respond with `{"status": "online"}`.
 
-### 2. Backend (Render / Railway / Fly.io / VPS)
-- Set root directory: `backend`
-- Build command: `pip install -r requirements.txt`
-- Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-- Environment Variables:
-  - `DATABASE_URL`: Your PostgreSQL connection string
-  - `SECRET_KEY`: A secure random JWT secret
-  - `DEFAULT_ADMIN_PASSWORD`: Secure password for initial admin login
+---
+
+### 2. Deploying Frontend to Vercel (https://vercel.com)
+1. Sign in to **Vercel** and click **Add New** -> **Project**.
+2. Import your GitHub repository.
+3. In the project setup screen:
+   - **Root Directory**: Click edit and select `frontend`.
+   - **Framework Preset**: `Vite`
+   - **Build Command**: `npm run build`
+   - **Output Directory**: `dist`
+4. Under **Environment Variables**, add:
+   - `VITE_API_URL`: Your Render backend URL (e.g. `https://jewellery-erp-backend.onrender.com` without trailing slash)
+5. Click **Deploy**.
+6. `vercel.json` is already pre-configured to handle single-page application (SPA) routing so refreshing pages like `/customers` or `/inventory` will work seamlessly.

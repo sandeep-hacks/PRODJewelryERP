@@ -9,6 +9,7 @@ import Billing from './pages/Billing';
 import GoldRate from './pages/GoldRate';
 import CustomerHistory from './pages/CustomerHistory';
 import Layout from './components/Layout';
+import ErrorBoundary from './components/ErrorBoundary';
 import { AuthProvider, useAuth } from './context/AuthContext';
 
 // ProtectedRoute component ensures user has a token before viewing ERP pages
@@ -36,25 +37,27 @@ function App() {
     <Router>
       <AuthProvider>
         <Toaster position="top-right" />
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route
-            path="/"
-            element={
-              <ProtectedRoute>
-                <Layout />
-              </ProtectedRoute>
-            }
-          >
-            <Route index element={<Dashboard />} />
-            <Route path="customers" element={<Customers />} />
-            <Route path="inventory" element={<Inventory />} />
-            <Route path="billing" element={<Billing />} />
-            <Route path="gold-rate" element={<GoldRate />} />
-            <Route path="customer-history" element={<CustomerHistory />} />
-          </Route>
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+        <ErrorBoundary>
+          <Routes>
+            <Route path="/login" element={<Login />} />
+            <Route
+              path="/"
+              element={
+                <ProtectedRoute>
+                  <Layout />
+                </ProtectedRoute>
+              }
+            >
+              <Route index element={<Dashboard />} />
+              <Route path="customers" element={<Customers />} />
+              <Route path="inventory" element={<Inventory />} />
+              <Route path="billing" element={<Billing />} />
+              <Route path="gold-rate" element={<GoldRate />} />
+              <Route path="customer-history" element={<CustomerHistory />} />
+            </Route>
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </ErrorBoundary>
       </AuthProvider>
     </Router>
   );

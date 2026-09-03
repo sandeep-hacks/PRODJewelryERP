@@ -36,8 +36,12 @@ dist-ssr/
 jewellery_erp.db
 invoices/*.pdf
 backend/invoices/*.pdf
+uploads/
+backend/uploads/
 
 # Environment files
 .env
 .env.*
 !.env.example
+backend/.env
+frontend/.env

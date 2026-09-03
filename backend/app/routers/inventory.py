@@ -3,6 +3,10 @@ from sqlalchemy.orm import Session
 from typing import List
 import uuid
 import os
+import base64
+import urllib.request
+import urllib.parse
+import json
 from ..database import get_db
 from ..models import JewelleryItem
 from ..schemas import JewelleryItemCreate, JewelleryItemResponse
@@ -15,6 +19,82 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 def generate_product_code():
     return f"PROD-{uuid.uuid4().hex[:8].upper()}"
+
+@router.post("/upload-image")
+async def upload_image(
+    file: UploadFile = File(...),
+    username: str = Depends(verify_token)
+):
+    content = await file.read()
+    filename = file.filename or f"jewel_{uuid.uuid4().hex[:8]}.jpg"
+    
+    # 1. ImageKit Cloud Upload (RFC 7578 multipart/form-data)
+    private_key = os.getenv("IMAGEKIT_PRIVATE_KEY", "private_c0UlgoVanFqKvHhb8p1vPZM2Xvw=")
+    if private_key:
+        try:
+            auth_str = f"{private_key}:"
+            b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("utf-8")
+            
+            boundary = f"----WebKitFormBoundary{uuid.uuid4().hex}"
+            
+            body_parts = [
+                (
+                    f"--{boundary}\r\n"
+                    f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+                    f"Content-Type: {file.content_type or 'application/octet-stream'}\r\n\r\n"
+                ).encode("utf-8") + content + b"\r\n",
+                (
+                    f"--{boundary}\r\n"
+                    f'Content-Disposition: form-data; name="fileName"\r\n\r\n'
+                    f"{filename}\r\n"
+                ).encode("utf-8"),
+                (
+                    f"--{boundary}\r\n"
+                    f'Content-Disposition: form-data; name="folder"\r\n\r\n'
+                    f"/jewellery-erp/\r\n"
+                ).encode("utf-8"),
+                f"--{boundary}--\r\n".encode("utf-8")
+            ]
+            
+            body = b"".join(body_parts)
+            upload_url = "https://upload.imagekit.io/api/v1/files/upload"
+            
+            req = urllib.request.Request(
+                upload_url,
+                data=body,
+                headers={
+                    "Authorization": f"Basic {b64_auth}",
+                    "Content-Type": f"multipart/form-data; boundary={boundary}",
+                    "Content-Length": str(len(body))
+                },
+                method="POST"
+            )
+            
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                cloud_url = data.get("url")
+                if cloud_url:
+                    return {
+                        "url": cloud_url,
+                        "thumbnailUrl": data.get("thumbnailUrl"),
+                        "fileId": data.get("fileId"),
+                        "storage": "imagekit"
+                    }
+        except Exception as e:
+            print(f"ImageKit upload warning: {e}. Falling back to local storage.")
+
+    # 2. Local fallback if cloud request fails
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    local_name = f"{uuid.uuid4().hex[:8]}_{filename}"
+    filepath = os.path.join(UPLOAD_DIR, local_name)
+    with open(filepath, "wb") as f:
+        f.write(content)
+    
+    # Return absolute URL so browser and frontend can load it directly
+    return {
+        "url": f"http://localhost:8000/uploads/products/{local_name}",
+        "storage": "local"
+    }
 
 @router.post("/", response_model=JewelleryItemResponse)
 async def create_jewellery_item(

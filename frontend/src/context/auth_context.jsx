@@ -1,5 +1,6 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import axios from 'axios';
+import { invalidateCache } from '../utils/cache';
 
 const AuthContext = createContext();
 
@@ -48,6 +49,7 @@ export const AuthProvider = ({ children }) => {
   const logout = () => {
     localStorage.removeItem('token');
     delete axios.defaults.headers.common['Authorization'];
+    invalidateCache(); // Clear in-memory client cache
     setUser(null);
     if (window.location.pathname !== '/login') {
       window.location.href = '/login';
