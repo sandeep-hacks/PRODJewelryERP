@@ -57,11 +57,24 @@ app.include_router(gold_rate.router)
 app.include_router(billing.router)
 
 @app.post("/login")
+@app.post("/login/")
 async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
     admin = db.query(Admin).filter(Admin.username == form_data.username).first()
+    
+    # Auto-seed default admin if database was freshly initialized
+    if not admin and form_data.username == "admin":
+        default_password = os.getenv("DEFAULT_ADMIN_PASSWORD", "admin123")
+        admin = Admin(
+            username="admin",
+            password_hash=get_password_hash(default_password)
+        )
+        db.add(admin)
+        db.commit()
+        db.refresh(admin)
+
     is_valid = False
     if admin:
         if verify_password(form_data.password, admin.password_hash):
@@ -129,10 +142,6 @@ async def get_dashboard_stats(
         "recentBills": recent_bills_data,
         "goldRate": gold_rate_data
     }
-
-@app.get("/")
-async def root():
-    return {"message": "Jewellery Shop ERP API", "version": "1.0.0"}
 
 @app.on_event("startup")
 async def startup_event():

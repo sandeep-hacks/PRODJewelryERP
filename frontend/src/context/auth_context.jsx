@@ -1,12 +1,10 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
-import axios from 'axios';
+import api, { API_BASE_URL } from '../services/api';
 import { invalidateCache } from '../utils/cache';
 
 const AuthContext = createContext();
 
 export const useAuth = () => useContext(AuthContext);
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(() => {
@@ -19,7 +17,7 @@ export const AuthProvider = ({ children }) => {
     const token = localStorage.getItem('token');
     if (token) {
       setUser({ token });
-      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+      api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
     }
     setLoading(false);
   }, []);
@@ -30,25 +28,34 @@ export const AuthProvider = ({ children }) => {
       formData.append('username', username);
       formData.append('password', password);
       
-      const response = await axios.post(`${API_BASE_URL}/login`, formData);
+      const response = await api.post('/login', formData);
       const { access_token } = response.data;
       
       localStorage.setItem('token', access_token);
-      axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
+      api.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
       setUser({ token: access_token });
       
       return { success: true };
     } catch (error) {
+      const detail = error.response?.data?.detail;
+      let errorMsg = detail;
+      if (!error.response) {
+        errorMsg = `Cannot reach backend (${API_BASE_URL}). Check your VITE_API_URL in Vercel settings and make sure your Render service is active.`;
+      } else if (error.response.status === 404) {
+        errorMsg = `Endpoint /login not found on ${API_BASE_URL}. Please check your backend URL in Vercel settings.`;
+      } else if (!detail) {
+        errorMsg = 'Login failed. Please check your credentials.';
+      }
       return { 
         success: false, 
-        error: error.response?.data?.detail || 'Login failed. Please check credentials.' 
+        error: errorMsg 
       };
     }
   };
 
   const logout = () => {
     localStorage.removeItem('token');
-    delete axios.defaults.headers.common['Authorization'];
+    delete api.defaults.headers.common['Authorization'];
     invalidateCache(); // Clear in-memory client cache
     setUser(null);
     if (window.location.pathname !== '/login') {
