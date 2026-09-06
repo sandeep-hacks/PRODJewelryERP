@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { useCachedApi } from '../utils/cache';
+import { useCachedApi, invalidateCache } from '../utils/cache';
 import { useDebounce } from '../utils/useDebounce';
 import { TableSkeleton } from '../components/Skeleton';
 import { 
@@ -15,22 +15,68 @@ import {
   FiFileText,
   FiCalendar,
   FiCheckCircle,
-  FiArrowLeft
+  FiArrowLeft,
+  FiX,
+  FiUsers,
+  FiDollarSign,
+  FiClock,
+  FiPlusCircle,
+  FiList,
+  FiAlertCircle,
+  FiCheck
 } from 'react-icons/fi';
+
+const ALPHABETS = ['ALL', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')];
 
 const CustomerHistory = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [bills, setBills] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [selectedLetter, setSelectedLetter] = useState('ALL');
+  const [loadingBills, setLoadingBills] = useState(false);
 
+  // Installment payment modal state
+  const [activePaymentBill, setActivePaymentBill] = useState(null);
+  const [paymentAmount, setPaymentAmount] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState('cash');
+  const [paymentNotes, setPaymentNotes] = useState('');
+  const [recordingPayment, setRecordingPayment] = useState(false);
+
+  // Payment receipts history modal state
+  const [viewHistoryBill, setViewHistoryBill] = useState(null);
+
+  // Debounced search term for smooth searching
   const debouncedSearch = useDebounce(searchTerm, 200);
-  const { data: rawSearchResults } = useCachedApi(
-    debouncedSearch ? `/customers/?search=${encodeURIComponent(debouncedSearch)}` : null,
-    { enabled: Boolean(debouncedSearch), ttl: 30000, initialData: [] }
-  );
-  const searchResults = Array.isArray(rawSearchResults) ? rawSearchResults : [];
+
+  // Fetch all customers by default (or filtered by search query)
+  const customersEndpoint = debouncedSearch
+    ? `/customers/?search=${encodeURIComponent(debouncedSearch)}`
+    : '/customers/';
+
+  const { data: rawCustomers, loading: loadingCustomers } = useCachedApi(customersEndpoint, {
+    ttl: 60000,
+    initialData: []
+  });
+
+  const allCustomers = Array.isArray(rawCustomers) ? rawCustomers : [];
+
+  // Filter & sort alphabetically (A to Z)
+  const sortedAndFilteredCustomers = useMemo(() => {
+    let list = [...allCustomers];
+
+    // Alphabetical sort by customer name
+    list.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+    // Filter by selected alphabet initial if not 'ALL'
+    if (selectedLetter !== 'ALL') {
+      list = list.filter(c => 
+        c.name && c.name.trim().toUpperCase().startsWith(selectedLetter)
+      );
+    }
+
+    return list;
+  }, [allCustomers, selectedLetter]);
 
   useEffect(() => {
     const customerId = searchParams.get('customer_id');
@@ -40,7 +86,7 @@ const CustomerHistory = () => {
   }, [searchParams]);
 
   const fetchCustomerBills = async (customerId) => {
-    setLoading(true);
+    setLoadingBills(true);
     try {
       const [customerResponse, billsResponse] = await Promise.all([
         api.get(`/customers/${customerId}`),
@@ -52,14 +98,13 @@ const CustomerHistory = () => {
     } catch (error) {
       toast.error('Failed to fetch customer history');
     } finally {
-      setLoading(false);
+      setLoadingBills(false);
     }
   };
 
   const selectCustomer = (customer) => {
     setSearchParams({ customer_id: customer.id });
     setSelectedCustomer(customer);
-    setSearchTerm('');
   };
 
   const handlePrintInvoice = async (billId, invoiceNum) => {
@@ -80,13 +125,72 @@ const CustomerHistory = () => {
     }
   };
 
+  const openPaymentModal = (bill) => {
+    setActivePaymentBill(bill);
+    setPaymentAmount(bill.pending_amount ? bill.pending_amount.toString() : '');
+    setPaymentMethod('cash');
+    setPaymentNotes('');
+  };
+
+  const handleRecordPayment = async (e) => {
+    e.preventDefault();
+    if (!activePaymentBill) return;
+
+    const amt = parseFloat(paymentAmount);
+    if (isNaN(amt) || amt <= 0) {
+      toast.error('Please enter a valid payment amount greater than zero');
+      return;
+    }
+
+    if (amt > Number(activePaymentBill.pending_amount || 0) + 0.01) {
+      toast.error(`Payment amount cannot exceed pending due of ₹${Number(activePaymentBill.pending_amount || 0).toLocaleString('en-IN')}`);
+      return;
+    }
+
+    setRecordingPayment(true);
+    try {
+      await api.post(`/billing/${activePaymentBill.id}/payments`, {
+        amount: amt,
+        payment_method: paymentMethod,
+        notes: paymentNotes || undefined
+      });
+
+      toast.success(`Payment of ₹${amt.toLocaleString('en-IN')} recorded successfully!`);
+      setActivePaymentBill(null);
+      setPaymentAmount('');
+      setPaymentNotes('');
+
+      // Refresh customer's bills
+      await fetchCustomerBills(selectedCustomer.id);
+      invalidateCache('/billing');
+      invalidateCache('/dashboard');
+      invalidateCache('/customers');
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to record payment');
+    } finally {
+      setRecordingPayment(false);
+    }
+  };
+
+  const totalCustomerSpend = useMemo(() => {
+    return bills.reduce((sum, b) => sum + (Number(b.total_amount) || 0), 0);
+  }, [bills]);
+
+  const totalCustomerPaid = useMemo(() => {
+    return bills.reduce((sum, b) => sum + (Number(b.paid_amount) || 0), 0);
+  }, [bills]);
+
+  const totalCustomerPending = useMemo(() => {
+    return bills.reduce((sum, b) => sum + (Number(b.pending_amount) || 0), 0);
+  }, [bills]);
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm">
         <div>
-          <h1 className="text-xl font-bold text-slate-900 tracking-tight">Purchase History & Invoices</h1>
-          <p className="text-xs text-slate-500 mt-0.5">Lookup customer ledger, previous gold transactions, and reprint tax invoices</p>
+          <h1 className="text-xl font-bold text-slate-900 tracking-tight">Customer Invoices & Ledger</h1>
+          <p className="text-xs text-slate-500 mt-0.5">Browse customer directory alphabetically, track dues, record installment receipts, and download tax invoices</p>
         </div>
 
         {selectedCustomer && (
@@ -96,50 +200,144 @@ const CustomerHistory = () => {
               setBills([]);
               setSearchParams({});
             }}
-            className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 px-3.5 py-2 rounded-xl transition"
+            className="flex items-center gap-1.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 px-4 py-2 rounded-xl transition shadow-xs"
           >
-            <FiArrowLeft size={14} /> Change Customer
+            <FiArrowLeft size={14} /> Back to All Customers
           </button>
         )}
       </div>
 
-      {/* Customer Lookup Card */}
+      {/* When NO customer is selected: Show Alphabetical Directory */}
       {!selectedCustomer && (
-        <div className="bg-white p-6 rounded-2xl border border-slate-200/80 shadow-sm space-y-4">
-          <h2 className="text-sm font-bold text-slate-900">Find Customer Record</h2>
-          <div className="relative">
-            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-              <FiSearch size={16} />
+        <div className="space-y-4">
+          {/* Search Bar & Alphabet Indexer */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm space-y-4">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+              <div className="relative w-full sm:max-w-md">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                  <FiSearch size={16} />
+                </div>
+                <input
+                  type="text"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full pl-10 pr-9 py-2.5 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 transition"
+                  placeholder="Search customer by name, mobile number, or ID..."
+                />
+                {searchTerm && (
+                  <button
+                    onClick={() => setSearchTerm('')}
+                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
+                  >
+                    <FiX size={14} />
+                  </button>
+                )}
+              </div>
+
+              <div className="text-xs text-slate-500 font-semibold flex items-center gap-1.5">
+                <FiUsers className="text-amber-600" />
+                <span>Showing {sortedAndFilteredCustomers.length} of {allCustomers.length} customer{allCustomers.length !== 1 ? 's' : ''} (A-Z)</span>
+              </div>
             </div>
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-10 pr-4 py-2.5 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 transition"
-              placeholder="Search by customer name, mobile number, or CUST ID..."
-            />
+
+            {/* Alphabetical A-Z Quick Filter Bar */}
+            <div className="pt-2 border-t border-slate-100">
+              <div className="flex items-center gap-1 overflow-x-auto pb-1 scrollbar-thin">
+                {ALPHABETS.map((letter) => {
+                  const isSelected = selectedLetter === letter;
+                  return (
+                    <button
+                      key={letter}
+                      type="button"
+                      onClick={() => setSelectedLetter(letter)}
+                      className={`min-w-[28px] h-7 px-1.5 rounded-lg text-[11px] font-bold transition flex items-center justify-center shrink-0 ${
+                        isSelected
+                          ? 'bg-amber-500 text-white shadow-xs'
+                          : 'bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-slate-200/60'
+                      }`}
+                    >
+                      {letter}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </div>
 
-          {searchResults.length > 0 && (
-            <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl max-h-60 overflow-y-auto">
-              {searchResults.map((cust) => (
-                <div
-                  key={cust.id}
-                  onClick={() => selectCustomer(cust)}
-                  className="p-3.5 hover:bg-slate-50 cursor-pointer transition flex items-center justify-between"
+          {/* Customer Directory List / Grid */}
+          {loadingCustomers && allCustomers.length === 0 ? (
+            <div className="p-12 text-center bg-white rounded-2xl border border-slate-200/80">
+              <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-amber-600 mx-auto"></div>
+              <p className="text-xs text-slate-400 mt-2 font-medium">Loading customer directory...</p>
+            </div>
+          ) : sortedAndFilteredCustomers.length === 0 ? (
+            <div className="bg-white rounded-2xl border border-slate-200/80 p-10 text-center">
+              <FiUsers className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+              <p className="text-sm font-semibold text-slate-700">No customers found</p>
+              <p className="text-xs text-slate-400 mt-1">
+                {selectedLetter !== 'ALL' 
+                  ? `No customer names begin with the letter "${selectedLetter}". Try clicking "ALL" or searching.` 
+                  : searchTerm ? 'No matching customer names or numbers found.' : 'No customers registered yet.'}
+              </p>
+              {(selectedLetter !== 'ALL' || searchTerm) && (
+                <button
+                  type="button"
+                  onClick={() => { setSelectedLetter('ALL'); setSearchTerm(''); }}
+                  className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-amber-600 hover:underline"
                 >
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-700 font-bold text-xs flex items-center justify-center">
-                      <FiUser size={14} />
-                    </div>
+                  Clear filters & view all customers
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+              {sortedAndFilteredCustomers.map((cust) => {
+                const initial = (cust.name || 'C').trim().charAt(0).toUpperCase();
+                return (
+                  <div
+                    key={cust.id}
+                    onClick={() => selectCustomer(cust)}
+                    className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs hover:shadow-md hover:border-amber-400/80 transition-all cursor-pointer flex flex-col justify-between group"
+                  >
                     <div>
-                      <p className="text-xs font-bold text-slate-900">{cust.name}</p>
-                      <p className="text-[11px] text-slate-500">{cust.phone} • <span className="font-mono">{cust.customer_id}</span></p>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-500 to-amber-400 text-white font-bold text-sm flex items-center justify-center shrink-0 shadow-xs shadow-amber-500/20 group-hover:scale-105 transition-transform">
+                            {initial}
+                          </div>
+                          <div className="min-w-0">
+                            <h3 className="text-sm font-bold text-slate-900 group-hover:text-amber-600 transition-colors truncate">
+                              {cust.name}
+                            </h3>
+                            <p className="text-xs text-slate-500 font-medium flex items-center gap-1 mt-0.5">
+                              <FiPhone size={11} className="text-slate-400" />
+                              <span>{cust.phone}</span>
+                            </p>
+                          </div>
+                        </div>
+
+                        <span className="text-[10px] font-mono font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md border border-slate-200 shrink-0">
+                          {cust.customer_id}
+                        </span>
+                      </div>
+
+                      {cust.address && (
+                        <p className="text-[11px] text-slate-400 mt-2.5 flex items-center gap-1 line-clamp-1">
+                          <FiMapPin size={11} className="shrink-0" />
+                          <span className="truncate">{cust.address}</span>
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="mt-3.5 pt-2.5 border-t border-slate-100 flex items-center justify-between text-xs">
+                      <span className="text-[11px] text-slate-400">View Invoices</span>
+                      <span className="font-semibold text-amber-600 group-hover:translate-x-0.5 transition-transform">
+                        Open Ledger →
+                      </span>
                     </div>
                   </div>
-                  <span className="text-xs font-semibold text-amber-600">View Invoices →</span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -147,27 +345,55 @@ const CustomerHistory = () => {
 
       {/* Selected Customer Profile Strip */}
       {selectedCustomer && (
-        <div className="bg-gradient-to-r from-amber-500/10 via-amber-400/5 to-slate-50 border border-amber-300/60 rounded-2xl p-5 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="bg-gradient-to-r from-amber-500/10 via-amber-400/5 to-slate-50 border border-amber-300/60 rounded-2xl p-5 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3.5">
             <div className="w-12 h-12 rounded-xl bg-amber-500 text-white flex items-center justify-center font-bold text-base shadow-sm">
-              {selectedCustomer.name?.charAt(0)}
+              {selectedCustomer.name?.charAt(0).toUpperCase()}
             </div>
             <div>
               <h2 className="text-base font-bold text-slate-900">{selectedCustomer.name}</h2>
               <div className="text-xs text-slate-600 mt-0.5 flex flex-wrap items-center gap-3">
-                <span className="flex items-center gap-1"><FiPhone size={12} /> {selectedCustomer.phone}</span>
-                <span className="font-mono bg-white/80 px-2 py-0.5 rounded border border-amber-200">{selectedCustomer.customer_id}</span>
+                <span className="flex items-center gap-1 font-medium"><FiPhone size={12} /> {selectedCustomer.phone}</span>
+                <span className="font-mono bg-white/80 px-2 py-0.5 rounded border border-amber-200 font-semibold">{selectedCustomer.customer_id}</span>
                 {selectedCustomer.address && <span className="flex items-center gap-1"><FiMapPin size={12} /> {selectedCustomer.address}</span>}
               </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-3 sm:gap-4">
+            {/* Total Billed */}
+            <div className="bg-white/90 border border-slate-200/80 px-3 py-2 rounded-xl text-right">
+              <span className="text-[10px] uppercase tracking-wider font-semibold text-slate-500 block">Total Billed</span>
+              <span className="text-sm sm:text-base font-bold text-slate-900">₹{totalCustomerSpend.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
+            </div>
+
+            {/* Total Paid */}
+            <div className="bg-emerald-50 border border-emerald-200 px-3 py-2 rounded-xl text-right">
+              <span className="text-[10px] uppercase tracking-wider font-semibold text-emerald-700 block">Total Paid</span>
+              <span className="text-sm sm:text-base font-bold text-emerald-700">₹{totalCustomerPaid.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
+            </div>
+
+            {/* Pending / Due Balance */}
+            <div className={`px-3 py-2 rounded-xl text-right border ${
+              totalCustomerPending > 0 ? 'bg-rose-50 border-rose-200' : 'bg-slate-50 border-slate-200'
+            }`}>
+              <span className={`text-[10px] uppercase tracking-wider font-semibold block ${
+                totalCustomerPending > 0 ? 'text-rose-700' : 'text-slate-500'
+              }`}>
+                Pending Due
+              </span>
+              <span className={`text-sm sm:text-base font-bold ${
+                totalCustomerPending > 0 ? 'text-rose-700' : 'text-slate-700'
+              }`}>
+                ₹{totalCustomerPending.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+              </span>
+            </div>
+
             <Link
               to="/billing"
-              className="px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-xl shadow-sm transition"
+              className="px-3.5 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white text-xs font-bold rounded-xl shadow-sm transition self-stretch sm:self-auto flex items-center justify-center gap-1"
             >
-              + Create New Bill
+              <FiPlusCircle size={14} /> New Bill
             </Link>
           </div>
         </div>
@@ -176,14 +402,18 @@ const CustomerHistory = () => {
       {/* Invoices List */}
       {selectedCustomer && (
         <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
-          <div className="p-5 border-b border-slate-100 flex items-center justify-between">
-            <h3 className="text-sm font-bold text-slate-900">
-              Tax Invoices & Transaction History ({bills.length})
-            </h3>
+          <div className="p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">
+                Tax Invoices & Dues Ledger ({bills.length})
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">Click "+ Pay Due" on any pending invoice to record installment payments</p>
+            </div>
+            <span className="text-xs text-slate-500 font-medium">Customer ID: {selectedCustomer.customer_id}</span>
           </div>
 
-          {loading ? (
-            <TableSkeleton rows={4} cols={5} />
+          {loadingBills ? (
+            <TableSkeleton rows={4} cols={7} />
           ) : bills.length === 0 ? (
             <div className="p-12 text-center">
               <FiFileText className="w-10 h-10 text-slate-300 mx-auto mb-2" />
@@ -200,53 +430,384 @@ const CustomerHistory = () => {
               <table className="w-full text-left border-collapse text-xs sm:text-sm">
                 <thead>
                   <tr className="bg-slate-50/80 border-b border-slate-100 text-slate-500 font-semibold uppercase text-[11px] tracking-wider">
-                    <th className="py-3 px-5">Invoice Number</th>
-                    <th className="py-3 px-5">Bill Date</th>
-                    <th className="py-3 px-5">Items Count</th>
-                    <th className="py-3 px-5">Total Amount</th>
-                    <th className="py-3 px-5">Payment Status</th>
-                    <th className="py-3 px-5 text-right">PDF Invoice</th>
+                    <th className="py-3 px-4">Invoice #</th>
+                    <th className="py-3 px-4">Date</th>
+                    <th className="py-3 px-4">Items</th>
+                    <th className="py-3 px-4 text-right">Total Bill</th>
+                    <th className="py-3 px-4 text-right">Amount Paid</th>
+                    <th className="py-3 px-4 text-right">Pending Due</th>
+                    <th className="py-3 px-4 text-center">Status</th>
+                    <th className="py-3 px-4 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {bills.map((bill) => (
-                    <tr key={bill.id} className="hover:bg-slate-50/60 transition">
-                      <td className="py-3.5 px-5 font-mono text-xs font-semibold text-slate-800">
-                        {bill.invoice_number}
-                      </td>
-                      <td className="py-3.5 px-5 text-slate-600">
-                        {bill.bill_date ? new Date(bill.bill_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
-                      </td>
-                      <td className="py-3.5 px-5 text-slate-600 font-medium">
-                        {bill.items?.length || 1} item(s)
-                      </td>
-                      <td className="py-3.5 px-5 font-bold text-slate-900">
-                        ₹{Number(bill.total_amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                      </td>
-                      <td className="py-3.5 px-5">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold capitalize ${
-                          bill.payment_status?.toLowerCase() === 'paid'
-                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                            : 'bg-amber-50 text-amber-700 border border-amber-200'
-                        }`}>
-                          {bill.payment_status || 'paid'}
-                        </span>
-                      </td>
-                      <td className="py-3.5 px-5 text-right">
-                        <button
-                          onClick={() => handlePrintInvoice(bill.id, bill.invoice_number)}
-                          className="inline-flex items-center gap-1 px-3 py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 transition"
-                        >
-                          <FiDownload size={13} className="text-amber-600" />
-                          <span>Download</span>
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {bills.map((bill) => {
+                    const totalAmt = Number(bill.total_amount || 0);
+                    const paidAmt = Number(bill.paid_amount || 0);
+                    const pendingAmt = Number(bill.pending_amount || 0);
+                    const isDue = pendingAmt > 0;
+                    const paymentCount = bill.payments?.length || (paidAmt > 0 ? 1 : 0);
+
+                    return (
+                      <tr key={bill.id} className="hover:bg-slate-50/60 transition">
+                        <td className="py-3.5 px-4 font-mono text-xs font-semibold text-slate-800">
+                          {bill.invoice_number}
+                        </td>
+                        <td className="py-3.5 px-4 text-slate-600 whitespace-nowrap">
+                          {bill.bill_date ? new Date(bill.bill_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
+                        </td>
+                        <td className="py-3.5 px-4 text-slate-600 font-medium">
+                          {bill.items?.length || 1} item(s)
+                        </td>
+                        <td className="py-3.5 px-4 text-right font-bold text-slate-900 whitespace-nowrap">
+                          ₹{totalAmt.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="py-3.5 px-4 text-right font-semibold text-emerald-700 whitespace-nowrap">
+                          ₹{paidAmt.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="py-3.5 px-4 text-right font-bold whitespace-nowrap">
+                          {isDue ? (
+                            <span className="text-rose-600 bg-rose-50 px-2 py-0.5 rounded-lg border border-rose-200">
+                              ₹{pendingAmt.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400 font-normal">₹0 (Clear)</span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-4 text-center whitespace-nowrap">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold capitalize ${
+                            bill.payment_status?.toLowerCase() === 'paid'
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                              : bill.payment_status?.toLowerCase() === 'partial'
+                                ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                                : 'bg-rose-100 text-rose-800 border border-rose-200'
+                          }`}>
+                            {bill.payment_status || 'paid'}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4 text-right whitespace-nowrap">
+                          <div className="inline-flex items-center gap-1.5 justify-end">
+                            {/* Pay Due Button */}
+                            {isDue && (
+                              <button
+                                onClick={() => openPaymentModal(bill)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white rounded-xl text-xs font-bold shadow-xs transition"
+                                title="Record an installment payment for this bill"
+                              >
+                                <FiPlusCircle size={12} />
+                                <span>Pay Due</span>
+                              </button>
+                            )}
+
+                            {/* View Receipts History Button */}
+                            {paymentCount > 0 && (
+                              <button
+                                onClick={() => setViewHistoryBill(bill)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 transition"
+                                title="View payment installments breakdown"
+                              >
+                                <FiList size={12} className="text-slate-500" />
+                                <span>Receipts ({paymentCount})</span>
+                              </button>
+                            )}
+
+                            {/* PDF Invoice Button */}
+                            <button
+                              onClick={() => handlePrintInvoice(bill.id, bill.invoice_number)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 transition"
+                              title="Download PDF Tax Invoice"
+                            >
+                              <FiDownload size={12} className="text-amber-600" />
+                              <span>PDF</span>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {/* MODAL: Record Due Payment / Installment */}
+      {activePaymentBill && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden animate-in fade-in zoom-in duration-150">
+            {/* Modal Header */}
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-gradient-to-r from-amber-50 to-white">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-amber-500 text-white flex items-center justify-center shadow-xs">
+                  <FiDollarSign size={18} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Record Due Payment</h3>
+                  <p className="text-[11px] text-slate-500">
+                    Invoice: <span className="font-mono font-semibold text-slate-700">{activePaymentBill.invoice_number}</span>
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActivePaymentBill(null)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition"
+              >
+                <FiX size={16} />
+              </button>
+            </div>
+
+            {/* Modal Form */}
+            <form onSubmit={handleRecordPayment} className="p-5 space-y-4">
+              {/* Summary cards */}
+              <div className="grid grid-cols-3 gap-2 p-3 bg-slate-50 rounded-xl border border-slate-200/80 text-center">
+                <div>
+                  <span className="text-[10px] font-medium text-slate-400 uppercase tracking-wider block">Total Bill</span>
+                  <span className="text-xs font-bold text-slate-800">
+                    ₹{Number(activePaymentBill.total_amount || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-medium text-emerald-600 uppercase tracking-wider block">Already Paid</span>
+                  <span className="text-xs font-bold text-emerald-700">
+                    ₹{Number(activePaymentBill.paid_amount || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-medium text-rose-600 uppercase tracking-wider block">Current Due</span>
+                  <span className="text-xs font-bold text-rose-700">
+                    ₹{Number(activePaymentBill.pending_amount || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                  </span>
+                </div>
+              </div>
+
+              {/* Amount Input */}
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-center">
+                  <label className="text-xs font-bold text-slate-700">
+                    Payment Amount to Receive (₹) <span className="text-rose-500">*</span>
+                  </label>
+                  <span className="text-[10px] text-slate-400">
+                    Max: ₹{Number(activePaymentBill.pending_amount || 0).toLocaleString('en-IN')}
+                  </span>
+                </div>
+                <div className="relative">
+                  <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 font-semibold text-sm">₹</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max={Number(activePaymentBill.pending_amount || 0)}
+                    step="0.01"
+                    required
+                    value={paymentAmount}
+                    onChange={(e) => setPaymentAmount(e.target.value)}
+                    placeholder="Enter amount being paid"
+                    className="w-full pl-8 pr-3 py-2 text-sm font-bold bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 outline-none text-slate-900"
+                  />
+                </div>
+
+                {/* Quick Fill Chips */}
+                <div className="flex items-center gap-1.5 pt-1">
+                  <span className="text-[10px] text-slate-400 font-medium">Quick:</span>
+                  <button
+                    type="button"
+                    onClick={() => setPaymentAmount(activePaymentBill.pending_amount.toString())}
+                    className="text-[10px] font-semibold px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition"
+                  >
+                    Pay Full Due (₹{Number(activePaymentBill.pending_amount || 0).toLocaleString('en-IN')})
+                  </button>
+                  {Number(activePaymentBill.pending_amount || 0) > 100 && (
+                    <button
+                      type="button"
+                      onClick={() => setPaymentAmount(Math.round(Number(activePaymentBill.pending_amount || 0) / 2).toString())}
+                      className="text-[10px] font-semibold px-2 py-0.5 rounded-lg bg-slate-100 text-slate-700 border border-slate-200 hover:bg-slate-200 transition"
+                    >
+                      50% (₹{Math.round(Number(activePaymentBill.pending_amount || 0) / 2).toLocaleString('en-IN')})
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Payment Method */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-700">Payment Mode</label>
+                <div className="grid grid-cols-4 gap-1.5 text-xs">
+                  {['cash', 'upi', 'card', 'bank_transfer'].map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setPaymentMethod(m)}
+                      className={`py-1.5 px-2 rounded-xl font-semibold capitalize border text-center transition ${
+                        paymentMethod === m
+                          ? 'bg-amber-500 text-white border-amber-600 shadow-xs'
+                          : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      {m.replace('_', ' ')}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Notes */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-700">Notes / Reference (Optional)</label>
+                <input
+                  type="text"
+                  value={paymentNotes}
+                  onChange={(e) => setPaymentNotes(e.target.value)}
+                  placeholder="e.g. 2nd installment, UPI Ref #, Cheque #..."
+                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 outline-none"
+                />
+              </div>
+
+              {/* Action Buttons */}
+              <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setActivePaymentBill(null)}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={recordingPayment || !paymentAmount || parseFloat(paymentAmount) <= 0}
+                  className="px-5 py-2 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-sm transition flex items-center gap-1.5"
+                >
+                  <FiCheck size={14} />
+                  <span>{recordingPayment ? 'Recording...' : `Record ₹${parseFloat(paymentAmount || 0).toLocaleString('en-IN')} Payment`}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: View Payment Receipts History */}
+      {viewHistoryBill && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-lg w-full overflow-hidden animate-in fade-in zoom-in duration-150">
+            {/* Header */}
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-gradient-to-r from-amber-50 to-white">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-amber-500 text-white flex items-center justify-center shadow-xs">
+                  <FiList size={18} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Payment Receipts History</h3>
+                  <p className="text-[11px] text-slate-500">
+                    Invoice: <span className="font-mono font-semibold text-slate-700">{viewHistoryBill.invoice_number}</span>
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setViewHistoryBill(null)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition"
+              >
+                <FiX size={16} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
+              {/* Financial Snapshot */}
+              <div className="grid grid-cols-3 gap-2 p-3 bg-slate-50 rounded-xl border border-slate-200 text-center">
+                <div>
+                  <span className="text-[10px] text-slate-400 font-medium uppercase block">Total Bill</span>
+                  <span className="text-xs font-bold text-slate-800">
+                    ₹{Number(viewHistoryBill.total_amount || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-emerald-600 font-medium uppercase block">Total Paid</span>
+                  <span className="text-xs font-bold text-emerald-700">
+                    ₹{Number(viewHistoryBill.paid_amount || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-rose-600 font-medium uppercase block">Remaining Due</span>
+                  <span className="text-xs font-bold text-rose-700">
+                    ₹{Number(viewHistoryBill.pending_amount || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                  </span>
+                </div>
+              </div>
+
+              {/* Installments Timeline */}
+              <div className="space-y-2.5">
+                <h4 className="text-xs font-bold text-slate-700">Installments Recorded ({viewHistoryBill.payments?.length || 0})</h4>
+                
+                {(!viewHistoryBill.payments || viewHistoryBill.payments.length === 0) ? (
+                  <div className="p-4 bg-slate-50 rounded-xl text-center text-xs text-slate-500">
+                    No installment receipts logged for this bill.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {viewHistoryBill.payments.map((pmt, idx) => (
+                      <div
+                        key={pmt.id || idx}
+                        className="p-3 bg-white border border-slate-200 rounded-xl flex items-center justify-between shadow-2xs hover:border-amber-300 transition"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-700 font-bold text-xs flex items-center justify-center shrink-0">
+                            #{idx + 1}
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-bold text-slate-900">
+                                ₹{Number(pmt.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                              </span>
+                              <span className="text-[10px] font-semibold uppercase bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded border border-slate-200">
+                                {pmt.payment_method?.replace('_', ' ') || 'cash'}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-400 mt-0.5">
+                              {pmt.payment_date ? new Date(pmt.payment_date).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
+                              {pmt.notes && <span className="ml-2 text-slate-600 font-medium italic">• "{pmt.notes}"</span>}
+                            </p>
+                          </div>
+                        </div>
+
+                        <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">
+                          Received
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
+              {Number(viewHistoryBill.pending_amount || 0) > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const b = viewHistoryBill;
+                    setViewHistoryBill(null);
+                    openPaymentModal(b);
+                  }}
+                  className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-xl transition flex items-center gap-1"
+                >
+                  <FiPlusCircle size={13} /> Pay Remaining Due (₹{Number(viewHistoryBill.pending_amount || 0).toLocaleString('en-IN')})
+                </button>
+              ) : (
+                <span className="text-xs font-semibold text-emerald-700 flex items-center gap-1">
+                  <FiCheckCircle /> Fully Paid & Settled
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => setViewHistoryBill(null)}
+                className="px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-200 rounded-xl transition"
+              >
+                Close
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

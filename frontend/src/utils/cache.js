@@ -4,6 +4,21 @@ import api from '../services/api';
 // In-memory cache store
 const memoryCache = new Map();
 const cacheListeners = new Map();
+const inFlightRequests = new Map();
+
+/**
+ * Deduplicated fetch - prevents multiple identical HTTP calls
+ */
+export const fetchDeduplicated = (url) => {
+  if (inFlightRequests.has(url)) {
+    return inFlightRequests.get(url);
+  }
+  const promise = api.get(url).finally(() => {
+    inFlightRequests.delete(url);
+  });
+  inFlightRequests.set(url, promise);
+  return promise;
+};
 
 /**
  * Get cached data by key
@@ -84,7 +99,7 @@ export const useCachedApi = (url, options = {}) => {
       }
 
       try {
-        const response = await api.get(targetUrl);
+        const response = await fetchDeduplicated(targetUrl);
         if (mountedRef.current && currentUrlRef.current === targetUrl) {
           setData(response.data);
           setCachedData(targetUrl, response.data);

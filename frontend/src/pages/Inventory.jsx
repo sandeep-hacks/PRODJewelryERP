@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import { useCachedApi, invalidateCache } from '../utils/cache';
 import { useDebounce } from '../utils/useDebounce';
 import { TableSkeleton } from '../components/Skeleton';
+import PurchasesSection from '../components/PurchasesSection';
 import { 
   FiSearch, 
   FiPlus, 
@@ -23,7 +24,8 @@ import {
   FiStar,
   FiShoppingBag,
   FiInfo,
-  FiDollarSign
+  FiDollarSign,
+  FiCalendar
 } from 'react-icons/fi';
 import { IoDiamondOutline } from 'react-icons/io5';
 
@@ -36,6 +38,13 @@ const getImageUrl = (url) => {
 };
 
 const Inventory = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = searchParams.get('tab') === 'purchases' ? 'purchases' : 'catalogue';
+  const setActiveTab = (tab) => {
+    if (tab === 'purchases') setSearchParams({ tab: 'purchases' });
+    else setSearchParams({});
+  };
+
   const [searchTerm, setSearchTerm] = useState('');
   const [metalFilter, setMetalFilter] = useState('');
   const [viewMode, setViewMode] = useState('grid'); // 'grid' (Flipkart style) or 'table'
@@ -200,8 +209,40 @@ const Inventory = () => {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 sm:gap-4 bg-white p-3.5 sm:p-5 rounded-2xl border border-slate-200/80 shadow-sm">
+      {/* Sub Navigation Tabs */}
+      <div className="flex items-center gap-2 bg-white p-1.5 rounded-2xl border border-slate-200/80 shadow-xs w-full sm:w-fit">
+        <button
+          type="button"
+          onClick={() => setActiveTab('catalogue')}
+          className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition ${
+            activeTab === 'catalogue'
+              ? 'bg-amber-500 text-white shadow-sm'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+          }`}
+        >
+          <FiBox size={14} />
+          <span>Stock Catalogue ({items.length})</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('purchases')}
+          className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition ${
+            activeTab === 'purchases'
+              ? 'bg-amber-500 text-white shadow-sm'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+          }`}
+        >
+          <FiShoppingBag size={14} />
+          <span>Supplier Purchases</span>
+        </button>
+      </div>
+
+      {activeTab === 'purchases' ? (
+        <PurchasesSection />
+      ) : (
+        <>
+          {/* Header */}
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 sm:gap-4 bg-white p-3.5 sm:p-5 rounded-2xl border border-slate-200/80 shadow-sm">
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">Jewellery Inventory</h1>
@@ -947,6 +988,8 @@ const Inventory = () => {
             </form>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );

@@ -8,14 +8,14 @@ from dotenv import load_dotenv
 
 try:
     from .database import engine, get_db, Base
-    from .models import Admin, Customer, JewelleryItem, Bill, GoldRate
+    from .models import Admin, Customer, JewelleryItem, Bill, GoldRate, Purchase, BillItem, BillPayment
     from .auth import verify_password, create_access_token, get_password_hash, verify_token
-    from .routers import customers, inventory, gold_rate, billing
+    from .routers import customers, inventory, gold_rate, billing, purchases
 except ImportError:
     from database import engine, get_db, Base
-    from models import Admin, Customer, JewelleryItem, Bill, GoldRate
+    from models import Admin, Customer, JewelleryItem, Bill, GoldRate, Purchase, BillItem, BillPayment
     from auth import verify_password, create_access_token, get_password_hash, verify_token
-    from routers import customers, inventory, gold_rate, billing
+    from routers import customers, inventory, gold_rate, billing, purchases
 
 load_dotenv()
 
@@ -55,6 +55,7 @@ app.include_router(customers.router)
 app.include_router(inventory.router)
 app.include_router(gold_rate.router)
 app.include_router(billing.router)
+app.include_router(purchases.router)
 
 @app.post("/login")
 @app.post("/login/")
@@ -97,6 +98,7 @@ async def login(
 
 @app.get("/dashboard/stats")
 async def get_dashboard_stats(
+    date: str = None,
     db: Session = Depends(get_db),
     username: str = Depends(verify_token)
 ):
@@ -104,10 +106,34 @@ async def get_dashboard_stats(
 
     total_customers = db.query(func.count(Customer.id)).scalar() or 0
     total_items = db.query(func.count(JewelleryItem.id)).scalar() or 0
-    total_bills = db.query(func.count(Bill.id)).scalar() or 0
-    total_revenue = db.query(func.sum(Bill.total_amount)).scalar() or 0.0
 
-    recent_bills = db.query(Bill).order_by(Bill.bill_date.desc()).limit(5).all()
+    bills_query = db.query(Bill)
+    purchases_query = db.query(Purchase)
+
+    if date and date.strip():
+        clean_date = date.strip()
+        try:
+            target_date = datetime.strptime(clean_date, "%Y-%m-%d").date()
+            start_time = datetime.combine(target_date, datetime.min.time())
+            end_time = datetime.combine(target_date, datetime.max.time())
+            bills_query = bills_query.filter(Bill.bill_date >= start_time, Bill.bill_date <= end_time)
+            purchases_query = purchases_query.filter(Purchase.purchase_date >= start_time, Purchase.purchase_date <= end_time)
+        except ValueError:
+            pass
+
+    # Sales stats
+    total_sales = bills_query.with_entities(func.sum(Bill.total_amount)).scalar() or 0.0
+    total_bills = bills_query.with_entities(func.count(Bill.id)).scalar() or 0
+
+    # Purchase stats
+    all_filtered_purchases = purchases_query.all()
+    total_purchases = sum(p.total_cost for p in all_filtered_purchases)
+    purchase_count = len(all_filtered_purchases)
+
+    # Net Revenue
+    net_revenue = float(total_sales) - float(total_purchases)
+
+    recent_bills = bills_query.order_by(Bill.bill_date.desc()).limit(15).all()
     recent_bills_data = [
         {
             "id": b.id,
@@ -116,6 +142,8 @@ async def get_dashboard_stats(
             "customer_name": b.customer.name if b.customer else "Walk-in Customer",
             "bill_date": b.bill_date.isoformat() if b.bill_date else None,
             "total_amount": float(b.total_amount or 0),
+            "paid_amount": float(b.paid_amount or 0),
+            "pending_amount": float(b.pending_amount or 0),
             "payment_status": b.payment_status or "paid",
             "payment_method": b.payment_method or "cash"
         }
@@ -138,13 +166,63 @@ async def get_dashboard_stats(
         "totalCustomers": total_customers,
         "totalItems": total_items,
         "totalBills": total_bills,
-        "todayRevenue": float(total_revenue),
+        "todayRevenue": float(total_sales),
+        "totalSales": float(total_sales),
+        "totalPurchases": float(total_purchases),
+        "purchaseCount": purchase_count,
+        "netRevenue": float(net_revenue),
         "recentBills": recent_bills_data,
-        "goldRate": gold_rate_data
+        "goldRate": gold_rate_data,
+        "filterDate": date
     }
+
+def run_db_migrations():
+    """Safely adds missing columns to existing SQLite or Postgres tables."""
+    from sqlalchemy import text
+    with engine.connect() as conn:
+        dialect = engine.dialect.name
+        if dialect == "sqlite":
+            statements = [
+                "ALTER TABLE bills ADD COLUMN apply_gst BOOLEAN DEFAULT 1;",
+                "ALTER TABLE bills ADD COLUMN discount_amount FLOAT DEFAULT 0.0;",
+                "ALTER TABLE bills ADD COLUMN discount_percentage FLOAT DEFAULT 0.0;",
+                "ALTER TABLE bills ADD COLUMN paid_amount FLOAT DEFAULT 0.0;",
+                "ALTER TABLE bills ADD COLUMN pending_amount FLOAT DEFAULT 0.0;",
+                "ALTER TABLE bill_items ADD COLUMN item_name VARCHAR;",
+                "ALTER TABLE bill_items ADD COLUMN is_manual BOOLEAN DEFAULT 0;",
+                "CREATE INDEX IF NOT EXISTS idx_bills_customer_id ON bills(customer_id);",
+                "CREATE INDEX IF NOT EXISTS idx_bills_bill_date ON bills(bill_date);",
+                "CREATE INDEX IF NOT EXISTS idx_bill_payments_bill_id ON bill_payments(bill_id);",
+            ]
+        else:
+            statements = [
+                "ALTER TABLE bills ADD COLUMN IF NOT EXISTS apply_gst BOOLEAN DEFAULT TRUE;",
+                "ALTER TABLE bills ADD COLUMN IF NOT EXISTS discount_amount FLOAT DEFAULT 0.0;",
+                "ALTER TABLE bills ADD COLUMN IF NOT EXISTS discount_percentage FLOAT DEFAULT 0.0;",
+                "ALTER TABLE bills ADD COLUMN IF NOT EXISTS paid_amount FLOAT DEFAULT 0.0;",
+                "ALTER TABLE bills ADD COLUMN IF NOT EXISTS pending_amount FLOAT DEFAULT 0.0;",
+                "ALTER TABLE bill_items ADD COLUMN IF NOT EXISTS item_name VARCHAR;",
+                "ALTER TABLE bill_items ADD COLUMN IF NOT EXISTS is_manual BOOLEAN DEFAULT FALSE;",
+                "ALTER TABLE bill_items ALTER COLUMN jewellery_id DROP NOT NULL;",
+                "CREATE INDEX IF NOT EXISTS idx_bills_customer_id ON bills(customer_id);",
+                "CREATE INDEX IF NOT EXISTS idx_bills_bill_date ON bills(bill_date);",
+                "CREATE INDEX IF NOT EXISTS idx_bill_payments_bill_id ON bill_payments(bill_id);",
+            ]
+        for stmt in statements:
+            try:
+                conn.execute(text(stmt))
+                conn.commit()
+            except Exception:
+                pass
 
 @app.on_event("startup")
 async def startup_event():
+    # Run DB schema check/alteration
+    try:
+        run_db_migrations()
+    except Exception as e:
+        print(f"Schema migration note: {e}")
+
     # Create or sync default admin
     db = next(get_db())
     default_password = os.getenv("DEFAULT_ADMIN_PASSWORD", "admin123")

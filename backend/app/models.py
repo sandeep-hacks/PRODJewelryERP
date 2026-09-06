@@ -54,32 +54,52 @@ class Bill(Base):
     customer_id = Column(Integer, ForeignKey("customers.id"))
     bill_date = Column(DateTime, default=datetime.utcnow)
     subtotal = Column(Float, nullable=False)
+    discount_amount = Column(Float, default=0.0)
+    discount_percentage = Column(Float, default=0.0)
+    apply_gst = Column(Boolean, default=True)
     gst_amount = Column(Float, nullable=False)
     total_amount = Column(Float, nullable=False)
+    paid_amount = Column(Float, default=0.0)
+    pending_amount = Column(Float, default=0.0)
     payment_status = Column(String, default="paid")  # paid, partial, unpaid
     payment_method = Column(String, default="cash")
     notes = Column(Text)
     
     customer = relationship("Customer", back_populates="bills")
     items = relationship("BillItem", back_populates="bill")
+    payments = relationship("BillPayment", back_populates="bill", cascade="all, delete-orphan", order_by="BillPayment.payment_date.asc()")
 
     @property
     def customer_name(self):
         return self.customer.name if self.customer else "Walk-in Customer"
+
+class BillPayment(Base):
+    __tablename__ = "bill_payments"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    bill_id = Column(Integer, ForeignKey("bills.id"), nullable=False)
+    amount = Column(Float, nullable=False)
+    payment_method = Column(String, default="cash")
+    payment_date = Column(DateTime, default=datetime.utcnow)
+    notes = Column(Text, nullable=True)
+    
+    bill = relationship("Bill", back_populates="payments")
 
 class BillItem(Base):
     __tablename__ = "bill_items"
     
     id = Column(Integer, primary_key=True, index=True)
     bill_id = Column(Integer, ForeignKey("bills.id"))
-    jewellery_id = Column(Integer, ForeignKey("jewellery_items.id"))
+    jewellery_id = Column(Integer, ForeignKey("jewellery_items.id"), nullable=True)
+    item_name = Column(String, nullable=True)
+    is_manual = Column(Boolean, default=False)
     quantity = Column(Integer, default=1)
-    weight = Column(Float, nullable=False)
-    purity = Column(Float, nullable=False)
-    rate_per_gram = Column(Float, nullable=False)
-    making_charges = Column(Float, nullable=False)
-    wastage_charges = Column(Float, default=0)
-    gst_amount = Column(Float, default=0)
+    weight = Column(Float, default=0.0)
+    purity = Column(Float, default=0.0)
+    rate_per_gram = Column(Float, default=0.0)
+    making_charges = Column(Float, default=0.0)
+    wastage_charges = Column(Float, default=0.0)
+    gst_amount = Column(Float, default=0.0)
     total_price = Column(Float, nullable=False)
     
     bill = relationship("Bill", back_populates="items")
@@ -87,7 +107,25 @@ class BillItem(Base):
 
     @property
     def jewellery_name(self):
+        if self.item_name:
+            return self.item_name
         return self.jewellery.name if self.jewellery else "Jewellery Item"
+
+class Purchase(Base):
+    __tablename__ = "purchases"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    supplier_name = Column(String, nullable=False, index=True)
+    item_name = Column(String, nullable=False)
+    quantity = Column(Integer, default=1)
+    cost = Column(Float, nullable=False)
+    purchase_date = Column(DateTime, default=datetime.utcnow, index=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    @property
+    def total_cost(self):
+        return (self.quantity or 1) * (self.cost or 0.0)
 
 class Admin(Base):
     __tablename__ = "admins"

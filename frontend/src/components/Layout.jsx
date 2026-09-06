@@ -28,10 +28,10 @@ const Layout = () => {
   const menuItems = [
     { path: '/', icon: FiHome, label: 'Dashboard' },
     { path: '/billing', icon: FiFileText, label: 'Billing & POS' },
-    { path: '/inventory', icon: FiBox, label: 'Inventory' },
+    { path: '/inventory', icon: FiBox, label: 'Inventory & Purchases' },
     { path: '/customers', icon: FiUsers, label: 'Customers' },
     { path: '/gold-rate', icon: FiDollarSign, label: 'Live Metal Rates' },
-    { path: '/customer-history', icon: FiFileText, label: 'Purchase History' },
+    { path: '/customer-history', icon: FiFileText, label: 'Customer Invoices' },
   ];
 
   const handleLogout = () => {

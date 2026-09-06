@@ -43,7 +43,7 @@ async def get_customers(
             (Customer.phone.ilike(f"%{search}%")) |
             (Customer.customer_id.ilike(f"%{search}%"))
         )
-    return query.all()
+    return query.order_by(Customer.name.asc()).all()
 
 @router.get("/{customer_id}", response_model=CustomerResponse)
 async def get_customer(
@@ -62,5 +62,5 @@ async def get_customer_bills(
     db: Session = Depends(get_db),
     username: str = Depends(verify_token)
 ):
-    bills = db.query(Bill).filter(Bill.customer_id == customer_id).all()
+    bills = db.query(Bill).filter(Bill.customer_id == customer_id).order_by(Bill.bill_date.desc()).all()
     return bills

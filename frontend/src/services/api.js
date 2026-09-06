@@ -5,6 +5,7 @@ const API_BASE_URL = RAW_BASE_URL.replace(/\/+$/, '');
 
 const api = axios.create({
   baseURL: API_BASE_URL,
+  timeout: 15000, // 15 second timeout to prevent indefinite hangs
 });
 
 // Automatically inject JWT bearer token if available

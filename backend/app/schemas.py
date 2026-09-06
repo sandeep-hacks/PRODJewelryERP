@@ -59,19 +59,31 @@ class GoldRateResponse(GoldRateBase):
         from_attributes = True
 
 class BillItemCreate(BaseModel):
-    jewellery_id: int
+    jewellery_id: Optional[int] = None
+    is_manual: Optional[bool] = False
+    name: Optional[str] = None
     quantity: int = 1
+    rate: Optional[float] = None
+    total: Optional[float] = None
+    making_charges_type: Optional[str] = "fixed"  # 'fixed' (₹) or 'percentage' (%)
+    making_charges_value: Optional[float] = None
 
 class BillCreate(BaseModel):
     customer_id: int
     items: List[BillItemCreate]
+    apply_gst: Optional[bool] = True
+    discount_amount: Optional[float] = 0.0
+    discount_percentage: Optional[float] = 0.0
+    paid_amount: Optional[float] = None
     payment_status: str = "paid"
     payment_method: str = "cash"
     notes: Optional[str] = None
 
 class BillItemResponse(BaseModel):
     id: int
-    jewellery_id: int
+    jewellery_id: Optional[int] = None
+    item_name: Optional[str] = None
+    is_manual: Optional[bool] = False
     jewellery_name: Optional[str] = "Jewellery Item"
     quantity: int
     weight: float
@@ -85,6 +97,23 @@ class BillItemResponse(BaseModel):
     class Config:
         from_attributes = True
 
+class BillPaymentCreate(BaseModel):
+    amount: float
+    payment_method: str = "cash"
+    payment_date: Optional[datetime] = None
+    notes: Optional[str] = None
+
+class BillPaymentResponse(BaseModel):
+    id: int
+    bill_id: int
+    amount: float
+    payment_method: str
+    payment_date: datetime
+    notes: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
 class BillResponse(BaseModel):
     id: int
     invoice_number: str
@@ -92,11 +121,36 @@ class BillResponse(BaseModel):
     customer_name: Optional[str] = "Walk-in Customer"
     bill_date: datetime
     subtotal: float
+    discount_amount: Optional[float] = 0.0
+    discount_percentage: Optional[float] = 0.0
+    apply_gst: Optional[bool] = True
     gst_amount: float
     total_amount: float
+    paid_amount: float = 0.0
+    pending_amount: float = 0.0
     payment_status: str
     payment_method: str
     items: List[BillItemResponse]
+    payments: Optional[List[BillPaymentResponse]] = []
+    
+    class Config:
+        from_attributes = True
+
+class PurchaseBase(BaseModel):
+    supplier_name: str
+    item_name: str
+    quantity: int = 1
+    cost: float
+    purchase_date: Optional[datetime] = None
+    notes: Optional[str] = None
+
+class PurchaseCreate(PurchaseBase):
+    pass
+
+class PurchaseResponse(PurchaseBase):
+    id: int
+    total_cost: float
+    created_at: datetime
     
     class Config:
         from_attributes = True
