@@ -15,13 +15,15 @@ import {
   FiClock, 
   FiRefreshCw, 
   FiX,
-  FiFileText
+  FiFileText,
+  FiDownload
 } from 'react-icons/fi';
 
 const Customers = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   // Debounce search term
   const debouncedSearch = useDebounce(searchTerm, 250);
@@ -36,6 +38,55 @@ const Customers = () => {
     address: '',
     email: ''
   });
+
+  const handleExportExcel = async () => {
+    try {
+      setExporting(true);
+      toast.loading('Generating customer Excel spreadsheet...', { id: 'export-toast' });
+      
+      const response = await api.get('/customers/export', { responseType: 'blob' });
+      
+      const blob = new Blob([response.data], { type: 'text/csv;charset=utf-8;' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      const dateStr = new Date().toISOString().slice(0, 10);
+      link.setAttribute('download', `Jewellery_Customers_${dateStr}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      
+      toast.success('Customer details downloaded successfully!', { id: 'export-toast' });
+    } catch (err) {
+      console.error('API export failed, falling back to client-side data:', err);
+      if (customers && customers.length > 0) {
+        const headers = ["Customer ID", "Customer Name", "Phone Number", "Email", "Address"];
+        const rows = customers.map(c => [
+          `"${c.customer_id || ''}"`,
+          `"${(c.name || '').replace(/"/g, '""')}"`,
+          `"'${c.phone || ''}"`,
+          `"${(c.email || '').replace(/"/g, '""')}"`,
+          `"${(c.address || '').replace(/"/g, '""')}"`
+        ]);
+        const csvContent = "\uFEFF" + [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `Jewellery_Customers_${new Date().toISOString().slice(0,10)}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        toast.success('Customer details downloaded in Excel format', { id: 'export-toast' });
+      } else {
+        toast.error('No customers found to export', { id: 'export-toast' });
+      }
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const handleAddCustomer = async (e) => {
     e.preventDefault();
@@ -72,14 +123,27 @@ const Customers = () => {
           <p className="text-xs text-slate-500 mt-0.5">Manage customer accounts, contact details, and invoice history</p>
         </div>
 
-        <button
-          onClick={() => setShowAddModal(true)}
-          className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-medium text-xs sm:text-sm rounded-xl shadow-sm shadow-amber-500/20 transition-all hover:scale-[1.01] active:scale-[0.98]"
-        >
-          <FiPlus size={16} />
-          <span>New Customer Profile</span>
-        </button>
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <button
+            onClick={handleExportExcel}
+            disabled={exporting}
+            className="flex items-center gap-2 px-3.5 py-2.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 active:bg-emerald-200/80 border border-emerald-200 font-semibold text-xs sm:text-sm rounded-xl shadow-xs transition-all hover:scale-[1.01] active:scale-[0.98] disabled:opacity-50"
+            title="Download customer list as an Excel spreadsheet"
+          >
+            <FiDownload size={16} className={exporting ? 'animate-bounce text-emerald-600' : 'text-emerald-600'} />
+            <span>{exporting ? 'Downloading...' : 'Download Excel'}</span>
+          </button>
+
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-medium text-xs sm:text-sm rounded-xl shadow-sm shadow-amber-500/20 transition-all hover:scale-[1.01] active:scale-[0.98]"
+          >
+            <FiPlus size={16} />
+            <span>New Customer Profile</span>
+          </button>
+        </div>
       </div>
+
 
       {/* Search Bar */}
       <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm flex items-center gap-3">

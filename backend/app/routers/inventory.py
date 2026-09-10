@@ -102,22 +102,32 @@ async def create_jewellery_item(
     db: Session = Depends(get_db),
     username: str = Depends(verify_token)
 ):
-    db_item = JewelleryItem(
-        product_code=generate_product_code(),
-        name=item.name,
-        metal_type=item.metal_type,
-        purity=item.purity,
-        weight=item.weight,
-        stock_quantity=item.stock_quantity,
-        making_charges=item.making_charges,
-        wastage_percentage=item.wastage_percentage,
-        description=item.description,
-        image_url=item.image_url
-    )
-    db.add(db_item)
-    db.commit()
-    db.refresh(db_item)
-    return db_item
+    try:
+        # Generate unique product code
+        code = generate_product_code()
+        while db.query(JewelleryItem).filter(JewelleryItem.product_code == code).first():
+            code = generate_product_code()
+
+        db_item = JewelleryItem(
+            product_code=code,
+            name=item.name,
+            metal_type=item.metal_type,
+            purity=float(item.purity),
+            weight=float(item.weight),
+            stock_quantity=int(item.stock_quantity),
+            making_charges=float(item.making_charges),
+            wastage_percentage=float(item.wastage_percentage),
+            description=item.description,
+            image_url=item.image_url
+        )
+        db.add(db_item)
+        db.commit()
+        db.refresh(db_item)
+        return db_item
+    except Exception as e:
+        db.rollback()
+        print(f"Error creating jewellery item: {e}")
+        raise HTTPException(status_code=400, detail=f"Database error: {str(e)}")
 
 @router.get("/", response_model=List[JewelleryItemResponse])
 async def get_inventory(
@@ -158,12 +168,18 @@ async def update_item(
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
     
-    for key, value in item_update.dict().items():
-        setattr(item, key, value)
-    
-    db.commit()
-    db.refresh(item)
-    return item
+    try:
+        for key, value in item_update.dict().items():
+            if hasattr(item, key):
+                setattr(item, key, value)
+        
+        db.commit()
+        db.refresh(item)
+        return item
+    except Exception as e:
+        db.rollback()
+        print(f"Error updating jewellery item: {e}")
+        raise HTTPException(status_code=400, detail=f"Database error: {str(e)}")
 
 @router.delete("/{item_id}")
 async def delete_item(
@@ -175,6 +191,11 @@ async def delete_item(
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
     
-    db.delete(item)
-    db.commit()
-    return {"message": "Item deleted successfully"}
+    try:
+        db.delete(item)
+        db.commit()
+        return {"message": "Item deleted successfully"}
+    except Exception as e:
+        db.rollback()
+        print(f"Error deleting jewellery item: {e}")
+        raise HTTPException(status_code=400, detail=f"Database error: {str(e)}")

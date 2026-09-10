@@ -190,9 +190,20 @@ def run_db_migrations():
                 "ALTER TABLE bills ADD COLUMN pending_amount FLOAT DEFAULT 0.0;",
                 "ALTER TABLE bill_items ADD COLUMN item_name VARCHAR;",
                 "ALTER TABLE bill_items ADD COLUMN is_manual BOOLEAN DEFAULT 0;",
+                "ALTER TABLE jewellery_items ADD COLUMN product_code VARCHAR;",
+                "ALTER TABLE jewellery_items ADD COLUMN metal_type VARCHAR DEFAULT 'Gold';",
+                "ALTER TABLE jewellery_items ADD COLUMN purity FLOAT DEFAULT 22.0;",
+                "ALTER TABLE jewellery_items ADD COLUMN weight FLOAT DEFAULT 0.0;",
+                "ALTER TABLE jewellery_items ADD COLUMN stock_quantity INTEGER DEFAULT 0;",
+                "ALTER TABLE jewellery_items ADD COLUMN making_charges FLOAT DEFAULT 0.0;",
+                "ALTER TABLE jewellery_items ADD COLUMN wastage_percentage FLOAT DEFAULT 0.0;",
+                "ALTER TABLE jewellery_items ADD COLUMN image_url VARCHAR;",
+                "ALTER TABLE jewellery_items ADD COLUMN description TEXT;",
+                "ALTER TABLE jewellery_items ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;",
                 "CREATE INDEX IF NOT EXISTS idx_bills_customer_id ON bills(customer_id);",
                 "CREATE INDEX IF NOT EXISTS idx_bills_bill_date ON bills(bill_date);",
                 "CREATE INDEX IF NOT EXISTS idx_bill_payments_bill_id ON bill_payments(bill_id);",
+                "CREATE INDEX IF NOT EXISTS idx_jewellery_product_code ON jewellery_items(product_code);",
             ]
         else:
             statements = [
@@ -204,9 +215,20 @@ def run_db_migrations():
                 "ALTER TABLE bill_items ADD COLUMN IF NOT EXISTS item_name VARCHAR;",
                 "ALTER TABLE bill_items ADD COLUMN IF NOT EXISTS is_manual BOOLEAN DEFAULT FALSE;",
                 "ALTER TABLE bill_items ALTER COLUMN jewellery_id DROP NOT NULL;",
+                "ALTER TABLE jewellery_items ADD COLUMN IF NOT EXISTS product_code VARCHAR;",
+                "ALTER TABLE jewellery_items ADD COLUMN IF NOT EXISTS metal_type VARCHAR DEFAULT 'Gold';",
+                "ALTER TABLE jewellery_items ADD COLUMN IF NOT EXISTS purity FLOAT DEFAULT 22.0;",
+                "ALTER TABLE jewellery_items ADD COLUMN IF NOT EXISTS weight FLOAT DEFAULT 0.0;",
+                "ALTER TABLE jewellery_items ADD COLUMN IF NOT EXISTS stock_quantity INTEGER DEFAULT 0;",
+                "ALTER TABLE jewellery_items ADD COLUMN IF NOT EXISTS making_charges FLOAT DEFAULT 0.0;",
+                "ALTER TABLE jewellery_items ADD COLUMN IF NOT EXISTS wastage_percentage FLOAT DEFAULT 0.0;",
+                "ALTER TABLE jewellery_items ADD COLUMN IF NOT EXISTS image_url VARCHAR;",
+                "ALTER TABLE jewellery_items ADD COLUMN IF NOT EXISTS description TEXT;",
+                "ALTER TABLE jewellery_items ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;",
                 "CREATE INDEX IF NOT EXISTS idx_bills_customer_id ON bills(customer_id);",
                 "CREATE INDEX IF NOT EXISTS idx_bills_bill_date ON bills(bill_date);",
                 "CREATE INDEX IF NOT EXISTS idx_bill_payments_bill_id ON bill_payments(bill_id);",
+                "CREATE INDEX IF NOT EXISTS idx_jewellery_product_code ON jewellery_items(product_code);",
             ]
         for stmt in statements:
             try:

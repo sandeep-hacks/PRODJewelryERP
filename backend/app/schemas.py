@@ -1,5 +1,5 @@
-from pydantic import BaseModel, EmailStr
-from typing import Optional, List
+from pydantic import BaseModel, EmailStr, field_validator
+from typing import Optional, List, Any
 from datetime import datetime
 
 class CustomerBase(BaseModel):
@@ -21,14 +21,49 @@ class CustomerResponse(CustomerBase):
 
 class JewelleryItemBase(BaseModel):
     name: str
-    metal_type: str
-    purity: float
-    weight: float
-    stock_quantity: int
-    making_charges: float
-    wastage_percentage: float = 0
+    metal_type: str = "Gold"
+    purity: float = 22.0
+    weight: float = 0.0
+    stock_quantity: int = 1
+    making_charges: float = 0.0
+    wastage_percentage: float = 0.0
     description: Optional[str] = None
     image_url: Optional[str] = None
+
+    @field_validator("weight", "purity", "making_charges", "wastage_percentage", mode="before")
+    @classmethod
+    def parse_float_fields(cls, v: Any) -> float:
+        if v is None or v == "":
+            return 0.0
+        try:
+            return float(v)
+        except (ValueError, TypeError):
+            return 0.0
+
+    @field_validator("stock_quantity", mode="before")
+    @classmethod
+    def parse_int_fields(cls, v: Any) -> int:
+        if v is None or v == "":
+            return 0
+        try:
+            return int(float(v))
+        except (ValueError, TypeError):
+            return 0
+
+    @field_validator("name", "metal_type", mode="before")
+    @classmethod
+    def parse_str_fields(cls, v: Any) -> str:
+        if v is None:
+            return ""
+        return str(v).strip()
+
+    @field_validator("description", "image_url", mode="before")
+    @classmethod
+    def empty_str_to_none(cls, v: Any) -> Optional[str]:
+        if v is None:
+            return None
+        s = str(v).strip()
+        return s if s else None
 
 class JewelleryItemCreate(JewelleryItemBase):
     pass
@@ -63,7 +98,12 @@ class BillItemCreate(BaseModel):
     is_manual: Optional[bool] = False
     name: Optional[str] = None
     quantity: int = 1
+    metal_type: Optional[str] = "Gold"
+    purity: Optional[float] = 22.0
+    weight: Optional[float] = 0.0
+    wastage_percentage: Optional[float] = 0.0
     rate: Optional[float] = None
+    rate_per_gram: Optional[float] = None
     total: Optional[float] = None
     making_charges_type: Optional[str] = "fixed"  # 'fixed' (₹) or 'percentage' (%)
     making_charges_value: Optional[float] = None

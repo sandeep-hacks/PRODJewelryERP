@@ -20,7 +20,8 @@ git branch -M main
 
 # Stage and commit changes
 git add .
-git commit -m "Production ready: Flipkart showcase, ImageKit cloud upload, mobile UI, Vercel & Render configs" || echo "No new changes to commit."
+git commit -m "feat: custom branded invoice layout, customer excel download, and billing enhancements" || echo "No new changes to commit."
+
 
 # Push to main branch
 git push -u origin main

@@ -54,9 +54,14 @@ const Billing = () => {
   const [showManualModal, setShowManualModal] = useState(false);
   const [manualForm, setManualForm] = useState({
     name: '',
+    metal_type: 'Gold',
+    purity: 22,
+    weight: '',
     quantity: 1,
-    rate: '',
-    total: ''
+    making_charge_mode: 'rupees_per_gram', // 'rupees_per_gram', 'flat_rupees', 'percentage'
+    making_charges: '',
+    wastage_percentage: 0,
+    description: ''
   });
 
   // Cached Live Gold Rate for accurate on-the-fly valuation
@@ -92,8 +97,9 @@ const Billing = () => {
       return;
     }
 
-    const baseRate = item.metal_type?.toLowerCase() === 'gold' ? rate24k : silverRate;
-    const purityFactor = (Number(item.purity) || 22) / 24;
+    const isGold = item.metal_type?.toLowerCase() === 'gold';
+    const baseRate = isGold ? rate24k : silverRate;
+    const purityFactor = isGold ? ((Number(item.purity) || 22) / 24) : 1.0;
     const singleProductValue = (Number(item.weight) || 0) * baseRate * purityFactor;
     const defaultMakingPerPiece = (Number(item.weight) || 0) * (Number(item.making_charges) || 0);
 
@@ -115,34 +121,114 @@ const Billing = () => {
     setItemSearch('');
   };
 
+  const getManualFormPricing = () => {
+    const isGold = (manualForm.metal_type || 'Gold').toLowerCase() === 'gold';
+    const baseRate = isGold ? rate24k : silverRate;
+    const weight = parseFloat(manualForm.weight) || 0;
+    const purity = isGold ? (Number(manualForm.purity) || 22) : 0;
+    const purityFactor = isGold ? (purity / 24) : 1.0;
+    const qty = parseInt(manualForm.quantity, 10) || 1;
+    const wastagePct = parseFloat(manualForm.wastage_percentage) || 0;
+
+    const singleMetalValue = weight * baseRate * purityFactor;
+
+    let singleMaking = 0;
+    const makingInput = parseFloat(manualForm.making_charges) || 0;
+    if (manualForm.making_charge_mode === 'rupees_per_gram') {
+      singleMaking = weight * makingInput;
+    } else if (manualForm.making_charge_mode === 'flat_rupees') {
+      singleMaking = makingInput;
+    } else if (manualForm.making_charge_mode === 'percentage') {
+      singleMaking = (singleMetalValue * makingInput) / 100;
+    }
+
+    const singleWastage = singleMetalValue * (wastagePct / 100);
+    const singleSubtotal = singleMetalValue + singleMaking + singleWastage;
+    const singleGst = singleSubtotal * 0.03;
+    const singleTotal = singleSubtotal + singleGst;
+
+    return {
+      baseRate,
+      singleMetalValue,
+      singleMaking,
+      singleWastage,
+      singleSubtotal,
+      singleGst,
+      singleTotal,
+      totalMetalValue: singleMetalValue * qty,
+      totalMaking: singleMaking * qty,
+      totalWastage: singleWastage * qty,
+      subtotal: singleSubtotal * qty,
+      gst: singleGst * qty,
+      total: singleTotal * qty,
+    };
+  };
+
   const addManualItem = () => {
-    if (!manualForm.name.trim()) {
-      toast.error('Please enter product name');
+    const name = manualForm.name.trim();
+    if (!name) {
+      toast.error('Please enter an item name');
       return;
     }
-    const qty = parseInt(manualForm.quantity) || 1;
-    const rate = parseFloat(manualForm.rate) || 0;
-    if (rate <= 0) {
-      toast.error('Please enter a valid rate');
+    const weight = parseFloat(manualForm.weight);
+    if (isNaN(weight) || weight <= 0) {
+      toast.error('Please enter a valid gross weight (greater than 0)');
       return;
     }
-    const total = parseFloat(manualForm.total) || (qty * rate);
+    const qty = parseInt(manualForm.quantity, 10) || 1;
+    if (qty < 1) {
+      toast.error('Please enter a valid quantity');
+      return;
+    }
+
+    const pricing = getManualFormPricing();
+    const isGold = (manualForm.metal_type || 'Gold').toLowerCase() === 'gold';
+    const purity = isGold ? (Number(manualForm.purity) || 22) : 0;
+    const makingInput = parseFloat(manualForm.making_charges) || 0;
+
+    const manualItemDetails = {
+      id: null,
+      name: name,
+      product_code: 'CUSTOM',
+      metal_type: manualForm.metal_type,
+      purity: purity,
+      weight: weight,
+      making_charges: manualForm.making_charge_mode === 'rupees_per_gram' ? makingInput : (weight > 0 ? pricing.singleMaking / weight : 0),
+      wastage_percentage: parseFloat(manualForm.wastage_percentage) || 0,
+      description: manualForm.description?.trim() || '',
+      image_url: ''
+    };
 
     setSelectedItems(prev => [
       ...prev,
       {
-        unique_id: `man_${Date.now()}_${Math.random()}`,
+        unique_id: `manual_${Date.now()}_${Math.random()}`,
         is_manual: true,
-        name: manualForm.name.trim(),
+        jewellery_id: null,
+        name: name,
         quantity: qty,
-        rate: rate,
-        total: total
+        item_details: manualItemDetails,
+        making_type: manualForm.making_charge_mode === 'percentage' ? 'percentage' : 'fixed',
+        making_value: manualForm.making_charge_mode === 'percentage' ? makingInput : pricing.singleMaking,
+        base_product_value: pricing.singleMetalValue,
+        rate: weight > 0 ? (pricing.singleMetalValue / weight) : pricing.singleMetalValue,
+        total: pricing.subtotal
       }
     ]);
 
-    setManualForm({ name: '', quantity: 1, rate: '', total: '' });
+    setManualForm({
+      name: '',
+      metal_type: 'Gold',
+      purity: 22,
+      weight: '',
+      quantity: 1,
+      making_charge_mode: 'rupees_per_gram',
+      making_charges: '',
+      wastage_percentage: 0,
+      description: ''
+    });
     setShowManualModal(false);
-    toast.success('Manual item added to invoice');
+    toast.success('Custom jewellery item added to invoice');
   };
 
   const updateQuantity = (index, delta) => {
@@ -174,7 +260,7 @@ const Billing = () => {
     setSelectedItems(prev => {
       const updated = [...prev];
       const item = updated[index];
-      if (item.is_manual) return prev;
+      if (item.is_manual && !item.item_details) return prev;
 
       const singleProdVal = item.base_product_value || 1;
       let newValue = item.making_value;
@@ -200,7 +286,7 @@ const Billing = () => {
     setSelectedItems(prev => {
       const updated = [...prev];
       const item = updated[index];
-      if (item.is_manual) return prev;
+      if (item.is_manual && !item.item_details) return prev;
 
       const num = parseFloat(val) || 0;
       updated[index] = {
@@ -223,7 +309,7 @@ const Billing = () => {
     let manualItemsTotal = 0;
 
     selectedItems.forEach(cartItem => {
-      if (cartItem.is_manual) {
+      if (cartItem.is_manual && !cartItem.item_details) {
         manualItemsTotal += Number(cartItem.total) || (Number(cartItem.quantity) * Number(cartItem.rate)) || 0;
         return;
       }
@@ -234,8 +320,9 @@ const Billing = () => {
       const purity = Number(item.purity) || 22;
       const wastagePct = Number(item.wastage_percentage) || 0;
 
-      const baseRate = item.metal_type?.toLowerCase() === 'gold' ? rate24k : silverRate;
-      const purityFactor = purity / 24;
+      const isGold = item.metal_type?.toLowerCase() === 'gold';
+      const baseRate = isGold ? rate24k : silverRate;
+      const purityFactor = isGold ? (purity / 24) : 1.0;
       const singleGoldVal = weight * baseRate * purityFactor;
       const itemGoldValue = singleGoldVal * qty;
 
@@ -335,12 +422,19 @@ const Billing = () => {
         customer_id: selectedCustomer.id,
         items: selectedItems.map(i => {
           if (i.is_manual) {
+            const details = i.item_details || {};
             return {
               is_manual: true,
-              name: i.name,
+              name: i.name || details.name,
               quantity: i.quantity,
-              rate: Number(i.rate),
-              total: Number(i.total)
+              metal_type: details.metal_type || 'Gold',
+              purity: details.purity || 0,
+              weight: details.weight || 0,
+              wastage_percentage: details.wastage_percentage || 0,
+              making_charges_type: i.making_type || 'fixed',
+              making_charges_value: Number(i.making_value || 0),
+              rate: Number(i.rate || 0),
+              total: Number(i.total || 0)
             };
           }
           return {
@@ -569,7 +663,7 @@ const Billing = () => {
                           <div>
                             <p className="font-semibold text-slate-800">{inv.name}</p>
                             <p className="text-[11px] text-slate-400">
-                              {inv.product_code} • {inv.metal_type} {inv.purity}K • {inv.weight}g
+                              {inv.product_code} • {inv.metal_type?.toLowerCase() === 'gold' ? `${inv.metal_type} ${inv.purity}K` : 'Silver'} • {inv.weight}g
                             </p>
                           </div>
                         </div>
@@ -587,95 +681,288 @@ const Billing = () => {
               </div>
             )}
 
-            {/* Manual Non-Inventory Item Modal */}
-            {showManualModal && (
-              <div className="p-4 bg-amber-500/5 rounded-2xl border border-amber-500/20 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <FiTag className="text-amber-600" />
-                    <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wide">
-                      Add Manual / Non-Inventory Item
-                    </h3>
+            {/* Manual Custom Jewellery Item Modal */}
+            {showManualModal && (() => {
+              const pricing = getManualFormPricing();
+              const isGold = (manualForm.metal_type || 'Gold').toLowerCase() === 'gold';
+
+              return (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 z-50 animate-in fade-in duration-200">
+                  <div className="bg-white rounded-2xl sm:rounded-3xl max-w-lg w-full p-4 sm:p-6 shadow-2xl border border-slate-100 max-h-[92vh] overflow-y-auto">
+                    <div className="flex justify-between items-center pb-3 sm:pb-4 border-b border-slate-100">
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-xl bg-amber-500/10 text-amber-600 flex items-center justify-center font-bold">
+                          <FiTag size={16} />
+                        </div>
+                        <div>
+                          <h2 className="text-sm sm:text-base font-bold text-slate-900">
+                            Add Custom / Manual Jewellery Item
+                          </h2>
+                          <p className="text-[10px] sm:text-xs text-slate-500">
+                            Directly bills custom or bespoke ornaments without altering inventory
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setShowManualModal(false)}
+                        className="p-1 sm:p-1.5 text-slate-400 hover:text-slate-600 rounded-lg"
+                      >
+                        <FiX size={18} />
+                      </button>
+                    </div>
+
+                    <form onSubmit={(e) => { e.preventDefault(); addManualItem(); }} className="mt-3 sm:mt-4 space-y-3 sm:space-y-4">
+                      {/* Item Title */}
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          Item Title / Name *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={manualForm.name}
+                          onChange={(e) => setManualForm({ ...manualForm, name: e.target.value })}
+                          className="w-full px-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 outline-none"
+                          placeholder="e.g. Traditional 22K Gold Bridal Necklace"
+                        />
+                      </div>
+
+                      {/* Metal Type & Purity */}
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">Metal Type</label>
+                          <select
+                            value={manualForm.metal_type}
+                            onChange={(e) => {
+                              const selected = e.target.value;
+                              setManualForm(prev => ({
+                                ...prev,
+                                metal_type: selected,
+                                purity: selected === 'Silver' ? 0 : (prev.purity || 22)
+                              }));
+                            }}
+                            className="w-full px-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 outline-none"
+                          >
+                            <option value="Gold">Gold</option>
+                            <option value="Silver">Silver</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">
+                            {manualForm.metal_type === 'Silver' ? 'Purity' : 'Purity (Karat / %)'}
+                          </label>
+                          {manualForm.metal_type === 'Silver' ? (
+                            <div className="w-full px-3 py-2 text-xs sm:text-sm bg-slate-100 border border-slate-200 text-slate-700 rounded-xl font-medium flex items-center justify-between">
+                              <span>Standard Silver</span>
+                              <span className="text-[10px] bg-slate-200 text-slate-700 px-2 py-0.5 rounded font-bold">Pure</span>
+                            </div>
+                          ) : (
+                            <select
+                              value={manualForm.purity}
+                              onChange={(e) => setManualForm({ ...manualForm, purity: Number(e.target.value) })}
+                              className="w-full px-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 outline-none"
+                            >
+                              <option value={24}>24 Karat (99.9% Pure)</option>
+                              <option value={22}>22 Karat (91.6% Hallmark)</option>
+                              <option value={18}>18 Karat (75.0% Jewellery)</option>
+                              <option value={14}>14 Karat (58.5%)</option>
+                            </select>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Gross Weight & Quantity */}
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">Gross Weight (grams) *</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0.01"
+                            required
+                            value={manualForm.weight}
+                            onChange={(e) => setManualForm({ ...manualForm, weight: e.target.value })}
+                            className="w-full px-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 outline-none"
+                            placeholder="12.50"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">Quantity *</label>
+                          <input
+                            type="number"
+                            min="1"
+                            required
+                            value={manualForm.quantity}
+                            onChange={(e) => setManualForm({ ...manualForm, quantity: Math.max(1, parseInt(e.target.value) || 1) })}
+                            className="w-full px-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 outline-none"
+                            placeholder="1"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Making Charges (Rupees / g, Total Flat Rupees, or %) */}
+                      <div className="p-3 bg-amber-50/50 rounded-xl border border-amber-200/80 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <label className="block text-xs font-bold text-amber-950">
+                            Making Charges (Rupees Options)
+                          </label>
+                          {/* Mode Selector Buttons */}
+                          <div className="inline-flex rounded-lg border border-amber-300/80 bg-white p-0.5 shadow-2xs text-[10px]">
+                            <button
+                              type="button"
+                              onClick={() => setManualForm({ ...manualForm, making_charge_mode: 'rupees_per_gram' })}
+                              className={`px-2 py-0.5 rounded-md font-semibold transition ${
+                                manualForm.making_charge_mode === 'rupees_per_gram'
+                                  ? 'bg-amber-500 text-white shadow-xs'
+                                  : 'text-slate-600 hover:text-slate-900'
+                              }`}
+                            >
+                              ₹ / gram
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setManualForm({ ...manualForm, making_charge_mode: 'flat_rupees' })}
+                              className={`px-2 py-0.5 rounded-md font-semibold transition ${
+                                manualForm.making_charge_mode === 'flat_rupees'
+                                  ? 'bg-amber-500 text-white shadow-xs'
+                                  : 'text-slate-600 hover:text-slate-900'
+                              }`}
+                            >
+                              Flat ₹ (Total)
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setManualForm({ ...manualForm, making_charge_mode: 'percentage' })}
+                              className={`px-2 py-0.5 rounded-md font-semibold transition ${
+                                manualForm.making_charge_mode === 'percentage'
+                                  ? 'bg-amber-500 text-white shadow-xs'
+                                  : 'text-slate-600 hover:text-slate-900'
+                              }`}
+                            >
+                              % Percent
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="relative">
+                          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400 font-bold text-xs">
+                            {manualForm.making_charge_mode === 'percentage' ? '%' : '₹'}
+                          </div>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={manualForm.making_charges}
+                            onChange={(e) => setManualForm({ ...manualForm, making_charges: e.target.value })}
+                            className="w-full pl-8 pr-3 py-2 text-xs sm:text-sm bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 outline-none font-semibold"
+                            placeholder={
+                              manualForm.making_charge_mode === 'rupees_per_gram'
+                                ? 'e.g. 450 (rupees per gram)'
+                                : manualForm.making_charge_mode === 'flat_rupees'
+                                  ? 'e.g. 1500 (total rupees)'
+                                  : 'e.g. 8 (% of metal value)'
+                            }
+                          />
+                        </div>
+
+                        <div className="text-[11px] text-amber-900 flex items-center justify-between pt-0.5">
+                          <span>
+                            {manualForm.making_charge_mode === 'rupees_per_gram' && (
+                              <>Rate: <strong>₹{parseFloat(manualForm.making_charges) || 0}/g</strong> × {parseFloat(manualForm.weight) || 0}g</>
+                            )}
+                            {manualForm.making_charge_mode === 'flat_rupees' && (
+                              <>Flat making in rupees: <strong>₹{parseFloat(manualForm.making_charges) || 0}</strong></>
+                            )}
+                            {manualForm.making_charge_mode === 'percentage' && (
+                              <>{parseFloat(manualForm.making_charges) || 0}% of ₹{pricing.singleMetalValue.toFixed(0)}</>
+                            )}
+                          </span>
+                          <span className="font-bold text-amber-950">
+                            = ₹{pricing.singleMaking.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Wastage % */}
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">Wastage %</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={manualForm.wastage_percentage}
+                          onChange={(e) => setManualForm({ ...manualForm, wastage_percentage: e.target.value })}
+                          className="w-full px-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 outline-none"
+                          placeholder="0"
+                        />
+                      </div>
+
+                      {/* Description */}
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">Description / Hallmark Details</label>
+                        <textarea
+                          rows="2"
+                          value={manualForm.description}
+                          onChange={(e) => setManualForm({ ...manualForm, description: e.target.value })}
+                          className="w-full px-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 outline-none"
+                          placeholder="e.g. BIS Hallmarked, Antique bridal finish..."
+                        />
+                      </div>
+
+                      {/* Real-time Calculation Summary Box */}
+                      <div className="bg-slate-50 rounded-2xl p-3 border border-slate-200/80 space-y-1.5 text-xs">
+                        <div className="flex justify-between items-center text-slate-500 text-[11px] pb-1 border-b border-slate-200/60">
+                          <span>Live Metal Rate:</span>
+                          <span className="font-semibold text-slate-700">
+                            {isGold ? `24K Gold: ₹${rate24k}/g` : `Silver: ₹${silverRate}/g`}
+                          </span>
+                        </div>
+                        <div className="flex justify-between text-slate-600">
+                          <span>Net Metal Value ({isGold ? `${manualForm.purity}K` : 'Silver'}):</span>
+                          <span className="font-semibold text-slate-800">₹{pricing.totalMetalValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
+                        </div>
+                        <div className="flex justify-between text-slate-600">
+                          <span>Total Making Charges:</span>
+                          <span className="font-semibold text-slate-800">₹{pricing.totalMaking.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
+                        </div>
+                        {pricing.totalWastage > 0 && (
+                          <div className="flex justify-between text-slate-600">
+                            <span>Wastage Allowance ({manualForm.wastage_percentage}%):</span>
+                            <span className="font-semibold text-slate-800">₹{pricing.totalWastage.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between pt-1.5 border-t border-slate-200 font-bold text-slate-900 text-sm">
+                          <span>Subtotal:</span>
+                          <span className="text-amber-700">₹{pricing.subtotal.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
+                        </div>
+                        <div className="text-[10px] text-slate-400 text-right">
+                          +3% GST (₹{pricing.gst.toFixed(0)}) = ₹{pricing.total.toLocaleString('en-IN', { maximumFractionDigits: 0 })} estimated total
+                        </div>
+                      </div>
+
+                      {/* Modal Footer */}
+                      <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                        <button
+                          type="button"
+                          onClick={() => setShowManualModal(false)}
+                          className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="submit"
+                          className="px-5 py-2 text-xs font-semibold bg-gradient-to-r from-amber-500 to-amber-600 text-white rounded-xl shadow-sm hover:from-amber-600 hover:to-amber-700 transition"
+                        >
+                          + Add to Invoice
+                        </button>
+                      </div>
+                    </form>
                   </div>
-                  <button
-                    onClick={() => setShowManualModal(false)}
-                    className="text-slate-400 hover:text-slate-600"
-                  >
-                    <FiX size={16} />
-                  </button>
                 </div>
-                <p className="text-[11px] text-slate-500">
-                  Items added here appear exclusively on this invoice and will not affect inventory stock quantities.
-                </p>
-
-                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-1">
-                  <div className="sm:col-span-2">
-                    <label className="block text-[11px] font-semibold text-slate-700 mb-1">Item Name / Description</label>
-                    <input
-                      type="text"
-                      value={manualForm.name}
-                      onChange={(e) => setManualForm({ ...manualForm, name: e.target.value })}
-                      placeholder="e.g. Silver Pooja Coin, Custom Polishing, Gift Box..."
-                      className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500/30 outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-700 mb-1">Quantity</label>
-                    <input
-                      type="number"
-                      min="1"
-                      value={manualForm.quantity}
-                      onChange={(e) => {
-                        const q = parseInt(e.target.value) || 1;
-                        const r = parseFloat(manualForm.rate) || 0;
-                        setManualForm({ ...manualForm, quantity: q, total: (q * r).toFixed(2) });
-                      }}
-                      className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500/30 outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-700 mb-1">Rate (₹)</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={manualForm.rate}
-                      onChange={(e) => {
-                        const r = parseFloat(e.target.value) || 0;
-                        const q = parseInt(manualForm.quantity) || 1;
-                        setManualForm({ ...manualForm, rate: e.target.value, total: (q * r).toFixed(2) });
-                      }}
-                      placeholder="0.00"
-                      className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500/30 outline-none"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between pt-2">
-                  <div className="text-xs font-semibold text-slate-700">
-                    Calculated Total: <span className="text-amber-700 font-bold">₹{manualForm.total || (parseInt(manualForm.quantity || 1) * parseFloat(manualForm.rate || 0)).toFixed(2)}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setShowManualModal(false)}
-                      className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-xl transition"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={addManualItem}
-                      className="px-4 py-1.5 text-xs font-bold bg-amber-500 hover:bg-amber-600 text-white rounded-xl shadow-sm transition"
-                    >
-                      + Add to Invoice
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
+              );
+            })()}
 
             {/* Items Table */}
             {selectedItems.length === 0 ? (
@@ -698,7 +985,7 @@ const Billing = () => {
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {selectedItems.map((cartItem, idx) => {
-                      if (cartItem.is_manual) {
+                      if (cartItem.is_manual && !cartItem.item_details) {
                         return (
                           <tr key={cartItem.unique_id} className="hover:bg-slate-50/50 bg-amber-50/20">
                             <td className="py-3 px-3">
@@ -759,8 +1046,9 @@ const Billing = () => {
                       }
 
                       const item = cartItem.item_details;
-                      const baseRate = item.metal_type?.toLowerCase() === 'gold' ? rate24k : silverRate;
-                      const singleGold = (Number(item.weight) || 0) * baseRate * ((Number(item.purity) || 22) / 24);
+                      const isGold = item.metal_type?.toLowerCase() === 'gold';
+                      const baseRate = isGold ? rate24k : silverRate;
+                      const singleGold = (Number(item.weight) || 0) * baseRate * (isGold ? ((Number(item.purity) || 22) / 24) : 1.0);
                       
                       let singleMaking = 0;
                       if (cartItem.making_type === 'percentage') {
@@ -772,18 +1060,25 @@ const Billing = () => {
                       const itemSubtotal = (singleGold + singleMaking + (singleGold * ((Number(item.wastage_percentage) || 0) / 100))) * cartItem.quantity;
 
                       return (
-                        <tr key={cartItem.unique_id} className="hover:bg-slate-50/50">
+                        <tr key={cartItem.unique_id} className={`hover:bg-slate-50/50 ${cartItem.is_manual ? 'bg-amber-50/15' : ''}`}>
                           <td className="py-3 px-3">
                             <div className="flex items-center gap-2.5">
                               {item.image_url ? (
                                 <img src={getImageUrl(item.image_url)} alt={item.name} className="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0" />
                               ) : (
-                                <div className="w-10 h-10 rounded-lg bg-amber-50 border border-amber-200/80 flex items-center justify-center text-amber-600 shrink-0">
-                                  <IoDiamondOutline size={16} />
+                                <div className={`w-10 h-10 rounded-lg ${cartItem.is_manual ? 'bg-amber-100 text-amber-700 border border-amber-300' : 'bg-amber-50 text-amber-600 border border-amber-200/80'} flex items-center justify-center shrink-0`}>
+                                  {cartItem.is_manual ? <FiTag size={16} /> : <IoDiamondOutline size={16} />}
                                 </div>
                               )}
                               <div>
-                                <div className="font-semibold text-slate-900">{item.name}</div>
+                                <div className="font-semibold text-slate-900 flex items-center gap-1.5">
+                                  {item.name}
+                                  {cartItem.is_manual && (
+                                    <span className="text-[9px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded-full">
+                                      Custom
+                                    </span>
+                                  )}
+                                </div>
                                 <div className="text-[11px] text-slate-400 font-mono">{item.product_code}</div>
                               </div>
                             </div>
@@ -791,7 +1086,7 @@ const Billing = () => {
 
                           <td className="py-3 px-3 space-y-1.5">
                             <div className="text-xs text-slate-700 font-medium">
-                              {item.metal_type} {item.purity}K • {item.weight}g
+                              {item.metal_type?.toLowerCase() === 'gold' ? `${item.metal_type} ${item.purity}K` : 'Silver'} • {item.weight}g
                             </div>
 
                             {/* Making Charges Interactive Toggle: Fixed ₹ or % */}

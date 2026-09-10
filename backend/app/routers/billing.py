@@ -14,6 +14,15 @@ from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
+from reportlab.pdfgen import canvas
+from ..invoice_assets import (
+    HEADER_LOGO_PATH,
+    WATERMARK_PATH,
+    DIAMOND_ICON_PATH,
+    generate_assets_if_needed,
+    num_to_words_indian
+)
+
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 
@@ -102,20 +111,50 @@ async def create_bill(
         if item.is_manual or not item.jewellery_id:
             manual_name = (item.name or "Custom Item").strip()
             qty = max(1, item.quantity)
-            rate = float(item.rate or 0.0)
-            item_total = float(item.total) if item.total is not None else (rate * qty)
+            weight = float(item.weight or 0.0)
+            purity = float(item.purity or 0.0)
+            wastage_pct = float(item.wastage_percentage or 0.0)
             
+            metal_type = (item.metal_type or "Gold").lower()
+            is_gold = metal_type == "gold"
+            base_rate = gold_rate.gold_rate_24k if is_gold else gold_rate.silver_rate
+            purity_factor = (purity / 24.0) if is_gold else 1.0
+            effective_rate = base_rate * purity_factor
+            
+            if weight > 0:
+                gold_value = weight * effective_rate
+                
+                # Making charges calculation
+                if item.making_charges_type == "percentage" and item.making_charges_value is not None:
+                    making_charge_val = gold_value * (float(item.making_charges_value) / 100.0)
+                elif item.making_charges_value is not None:
+                    making_charge_val = float(item.making_charges_value)
+                else:
+                    making_charge_val = 0.0
+                
+                wastage_charge_val = gold_value * (wastage_pct / 100.0)
+                item_unit_subtotal = gold_value + making_charge_val + wastage_charge_val
+                item_total = float(item.total) if item.total is not None else (item_unit_subtotal * qty)
+                rate_to_store = effective_rate
+                making_to_store = making_charge_val * qty
+                wastage_to_store = wastage_charge_val * qty
+            else:
+                rate_to_store = float(item.rate or item.rate_per_gram or 0.0)
+                item_total = float(item.total) if item.total is not None else (rate_to_store * qty)
+                making_to_store = float(item.making_charges_value or 0.0) * qty if item.making_charges_type == "fixed" else 0.0
+                wastage_to_store = 0.0
+
             db_bill_item = BillItem(
                 bill_id=db_bill.id,
                 jewellery_id=None,
                 item_name=manual_name,
                 is_manual=True,
                 quantity=qty,
-                weight=0.0,
-                purity=0.0,
-                rate_per_gram=rate,
-                making_charges=0.0,
-                wastage_charges=0.0,
+                weight=weight * qty,
+                purity=purity,
+                rate_per_gram=rate_to_store,
+                making_charges=making_to_store,
+                wastage_charges=wastage_to_store,
                 gst_amount=0.0,
                 total_price=item_total
             )
@@ -137,12 +176,14 @@ async def create_bill(
             )
         
         # Calculate price based on metal type
-        if jewellery.metal_type.lower() == "gold":
+        is_gold = jewellery.metal_type.lower() == "gold"
+        if is_gold:
             rate_24k = gold_rate.gold_rate_24k
+            purity_factor = jewellery.purity / 24.0
         else:
             rate_24k = gold_rate.silver_rate
+            purity_factor = 1.0
         
-        purity_factor = jewellery.purity / 24
         gold_value = jewellery.weight * rate_24k * purity_factor
 
         # Custom making charges (Fixed or Percentage)
@@ -242,163 +283,391 @@ async def create_bill(
     
     return db_bill
 
+def draw_rupee_vector(c, x, y, size=7.5, color=colors.HexColor('#111827')):
+    """Draws a crisp Indian Rupee symbol vector on canvas"""
+    c.saveState()
+    c.setStrokeColor(color)
+    c.setFillColor(color)
+    c.setLineWidth(max(0.65, size * 0.09))
+    
+    bar_w = size * 0.58
+    top_y = y + size * 0.72
+    mid_y = y + size * 0.48
+    stem_x = x + size * 0.12
+    
+    # Upper horizontal bar
+    c.line(x, top_y, x + bar_w, top_y)
+    # Middle horizontal bar
+    c.line(x, mid_y, x + bar_w * 0.85, mid_y)
+    # Vertical upper stem
+    c.line(stem_x, top_y, stem_x, y + size * 0.28)
+    
+    # Upper semi-circle loop
+    p = c.beginPath()
+    p.moveTo(stem_x, top_y)
+    p.curveTo(x + size * 0.62, top_y, x + size * 0.62, mid_y, stem_x, mid_y)
+    c.drawPath(p, stroke=1, fill=0)
+    
+    # Downward diagonal slash leg
+    c.line(stem_x + size * 0.05, mid_y, x + size * 0.55, y)
+    c.restoreState()
+
+def draw_currency(c, x, y, amount_val, font_size=8.5, font_name="Helvetica", bold=False, color=colors.HexColor('#111827'), align="right"):
+    """Draws ₹ symbol followed by formatted amount, e.g. ₹ 86,258.38"""
+    val_str = f"{amount_val:,.2f}"
+    actual_font = f"{font_name}-Bold" if bold else font_name
+    c.setFont(actual_font, font_size)
+    c.setFillColor(color)
+    
+    text_width = c.stringWidth(val_str, actual_font, font_size)
+    gap = 2.5
+    symbol_width = font_size * 0.58
+    total_w = symbol_width + gap + text_width
+    
+    if align == "right":
+        start_x = x - total_w
+    elif align == "center":
+        start_x = x - total_w / 2.0
+    else:
+        start_x = x
+        
+    draw_rupee_vector(c, start_x, y, size=font_size, color=color)
+    c.drawString(start_x + symbol_width + gap, y, val_str)
+
+def draw_col_header(c, cx, cy, title, font_size=7.5, color=colors.HexColor('#111827')):
+    """Draws column header, rendering (₹) cleanly if present"""
+    c.setFont("Helvetica-Bold", font_size)
+    c.setFillColor(color)
+    if "(₹)" in title:
+        prefix = title.replace("(₹)", "(").strip()
+        prefix_w = c.stringWidth(prefix, "Helvetica-Bold", font_size)
+        sym_w = font_size * 0.58
+        close_w = c.stringWidth(")", "Helvetica-Bold", font_size)
+        total_w = prefix_w + sym_w + close_w + 1.5
+        
+        start_x = cx - total_w / 2.0
+        c.drawString(start_x, cy, prefix)
+        draw_rupee_vector(c, start_x + prefix_w + 1.0, cy, size=font_size * 0.95, color=color)
+        c.drawString(start_x + prefix_w + sym_w + 1.5, cy, ")")
+    else:
+        c.drawCentredString(cx, cy, title)
+
 def generate_pdf_invoice(bill_id: int, db: Session):
     bill = db.query(Bill).filter(Bill.id == bill_id).first()
     customer = db.query(Customer).filter(Customer.id == bill.customer_id).first()
     items = db.query(BillItem).filter(BillItem.bill_id == bill.id).all()
-    payments = db.query(BillPayment).filter(BillPayment.bill_id == bill.id).order_by(BillPayment.payment_date.asc()).all()
+    
+    # Ensure branding assets are available
+    generate_assets_if_needed()
     
     # Create PDF directory
     pdf_dir = "invoices"
     os.makedirs(pdf_dir, exist_ok=True)
     pdf_path = f"{pdf_dir}/{bill.invoice_number}.pdf"
     
-    # Create PDF
-    doc = SimpleDocTemplate(pdf_path, pagesize=A4)
-    elements = []
+    c = canvas.Canvas(pdf_path, pagesize=A4)
+    page_w, page_h = A4  # 595.27 x 841.89
     
-    # Styles
-    styles = getSampleStyleSheet()
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Heading1'],
-        fontSize=24,
-        spaceAfter=30,
-        alignment=1
-    )
+    # Outer frame coordinates
+    margin = 18.0
+    x_left = margin
+    x_right = page_w - margin
+    y_bot = margin
+    y_top = page_h - margin
+    box_w = x_right - x_left
+    box_h = y_top - y_bot
     
-    # Add title
-    elements.append(Paragraph("Jewellery Shop Invoice", title_style))
-    elements.append(Spacer(1, 20))
+    # 1. Outer Border
+    c.setStrokeColor(colors.HexColor('#737373'))
+    c.setLineWidth(0.9)
+    c.rect(x_left, y_bot, box_w, box_h, stroke=1, fill=0)
     
-    # Add invoice details
-    invoice_info = [
-        [Paragraph(f"<b>Invoice Number:</b> {bill.invoice_number}", styles['Normal'])],
-        [Paragraph(f"<b>Date:</b> {bill.bill_date.strftime('%Y-%m-%d %H:%M')}", styles['Normal'])],
-        [Paragraph(f"<b>Customer:</b> {customer.name if customer else 'Walk-in Customer'}", styles['Normal'])],
-        [Paragraph(f"<b>Customer ID:</b> {customer.customer_id if customer else '-'}", styles['Normal'])],
-        [Paragraph(f"<b>Phone:</b> {customer.phone if customer else '-'}", styles['Normal'])],
-    ]
+    # 2. Header Area
+    sep1_y = 746.0
     
-    for info in invoice_info:
-        elements.append(info[0])
+    # 2a. Diamond Logo on top left
+    if os.path.exists(DIAMOND_ICON_PATH):
+        c.drawImage(DIAMOND_ICON_PATH, 36, 752, width=62, height=62, mask='auto')
+        
+    # 2b. Central Shop Header Name "श्रवण ज्वेलर्स" + Slogan
+    if os.path.exists(HEADER_LOGO_PATH):
+        header_w = 280.0
+        header_h = 56.0
+        c.drawImage(HEADER_LOGO_PATH, (page_w - header_w) / 2.0, 754, width=header_w, height=header_h, mask='auto')
+        
+    # 2c. Top Right Header text
+    c.setFillColor(colors.HexColor('#111827'))
+    c.setFont("Helvetica-Bold", 11)
+    c.drawRightString(x_right - 14, 804, "INVOICE")
+    c.setFont("Helvetica", 8.5)
+    c.setFillColor(colors.HexColor('#374151'))
+    c.drawRightString(x_right - 14, 789, "GSTIN : 36XXXXXXXX0X")
+    c.drawRightString(x_right - 14, 775, "Mob : 7488468139")
     
-    elements.append(Spacer(1, 20))
+    # Horizontal Divider 1
+    c.setStrokeColor(colors.HexColor('#9CA3AF'))
+    c.setLineWidth(0.7)
+    c.line(x_left, sep1_y, x_right, sep1_y)
     
-    # Add items table
-    table_data = [
-        ['Item', 'Qty', 'Weight(g)', 'Purity', 'Rate/g', 'Making', 'GST', 'Total']
-    ]
+    # 3. Bill To / Invoice Details Box
+    sep2_y = 668.0
+    x_mid = 328.0
     
-    for item in items:
-        if item.is_manual or not item.jewellery_id:
-            table_data.append([
-                item.jewellery_name,
-                str(item.quantity),
-                "-",
-                "-",
-                f"₹{item.rate_per_gram:.2f}",
-                "-",
-                "-",
-                f"₹{item.total_price:.2f}"
-            ])
+    # Vertical divider line
+    c.setStrokeColor(colors.HexColor('#D1D5DB'))
+    c.setLineWidth(0.7)
+    c.line(x_mid, sep1_y, x_mid, sep2_y)
+    
+    # Customer Details (Left)
+    cust_name = (customer.name if customer else "Walk-in Customer")
+    cust_phone = (customer.phone if customer and customer.phone else "-")
+    cust_id = (customer.customer_id if customer and customer.customer_id else "-")
+    
+    c.setFont("Helvetica-Bold", 9)
+    c.setFillColor(colors.HexColor('#111827'))
+    c.drawString(32, 730, "Bill To :")
+    c.drawString(32, 715, cust_name)
+    c.setFont("Helvetica", 8.5)
+    c.drawString(32, 700, f"Phone : {cust_phone}")
+    c.drawString(32, 685, f"Customer ID : {cust_id}")
+    
+    # Invoice Details (Right)
+    b_date_str = bill.bill_date.strftime('%Y-%m-%d %H:%M') if bill.bill_date else datetime.now().strftime('%Y-%m-%d %H:%M')
+    p_method_str = (bill.payment_method or "CASH").upper()
+    p_status_str = (bill.payment_status or "PAID").upper()
+    
+    c.setFont("Helvetica-Bold", 8.5)
+    c.setFillColor(colors.HexColor('#111827'))
+    c.drawString(342, 730, "Invoice No : ")
+    inv_label_w = c.stringWidth("Invoice No : ", "Helvetica-Bold", 8.5)
+    
+    # Red Highlight for Invoice Number
+    c.setFont("Helvetica-Bold", 8.5)
+    c.setFillColor(colors.HexColor('#B91C1C'))
+    c.drawString(342 + inv_label_w, 730, str(bill.invoice_number))
+    
+    c.setFillColor(colors.HexColor('#111827'))
+    c.setFont("Helvetica-Bold", 8.5)
+    c.drawString(342, 715, "Date")
+    c.setFont("Helvetica", 8.5)
+    c.drawString(425, 715, f": {b_date_str}")
+    
+    c.setFont("Helvetica-Bold", 8.5)
+    c.drawString(342, 700, "Payment Method")
+    c.setFont("Helvetica", 8.5)
+    c.drawString(425, 700, f": {p_method_str}")
+    
+    c.setFont("Helvetica-Bold", 8.5)
+    c.drawString(342, 685, "Payment Status")
+    c.setFont("Helvetica", 8.5)
+    c.drawString(425, 685, f": {p_status_str}")
+    
+    # Horizontal Divider 2
+    c.setStrokeColor(colors.HexColor('#9CA3AF'))
+    c.setLineWidth(0.7)
+    c.line(x_left, sep2_y, x_right, sep2_y)
+    
+    # 4. Table Setup
+    col_widths = [32.0, 110.0, 30.0, 56.0, 44.0, 58.0, 56.0, 56.0, 117.27]
+    x_edges = [x_left]
+    for w in col_widths:
+        x_edges.append(x_edges[-1] + w)
+        
+    header_top = sep2_y
+    header_h = 26.0
+    header_bot = header_top - header_h
+    
+    # Fill Table Header Background
+    c.setFillColor(colors.HexColor('#F3F4F6'))
+    c.rect(x_left, header_bot, box_w, header_h, stroke=0, fill=1)
+    
+    headers = ["Sl. No", "Item Description", "Qty", "Weight (g)", "Purity", "Rate / g (₹)", "Making (₹)", "GST (₹)", "Amount (₹)"]
+    for i, title in enumerate(headers):
+        cx = (x_edges[i] + x_edges[i+1]) / 2.0
+        draw_col_header(c, cx, header_bot + 9.5, title, font_size=7.5)
+        
+    # Table grid bottom limit (Totals box top)
+    totals_top = 285.0
+    
+    # Draw Central Watermark inside grid area
+    if os.path.exists(WATERMARK_PATH):
+        wm_w = 340.0
+        wm_h = 240.0
+        wm_x = (page_w - wm_w) / 2.0
+        wm_y = (header_bot + totals_top) / 2.0 - (wm_h / 2.0)
+        c.drawImage(WATERMARK_PATH, wm_x, wm_y, width=wm_w, height=wm_h, mask='auto')
+        
+    # Draw Table Item Rows
+    row_h = 24.0
+    cur_y = header_bot
+    
+    for idx, it in enumerate(items, 1):
+        row_bot = cur_y - row_h
+        
+        # Horizontal row line
+        c.setStrokeColor(colors.HexColor('#E5E7EB'))
+        c.setLineWidth(0.6)
+        c.line(x_left, row_bot, x_right, row_bot)
+        
+        text_y = row_bot + 8.0
+        c.setFont("Helvetica", 8)
+        c.setFillColor(colors.HexColor('#111827'))
+        
+        # Sl. No
+        c.drawCentredString((x_edges[0] + x_edges[1]) / 2.0, text_y, str(idx))
+        
+        # Item Description
+        c.drawString(x_edges[1] + 6, text_y, str(it.jewellery_name)[:25])
+        
+        # Qty
+        c.drawCentredString((x_edges[2] + x_edges[3]) / 2.0, text_y, str(it.quantity))
+        
+        # Weight (g)
+        w_str = f"{it.weight:.2f}" if (it.weight and it.weight > 0) else "-"
+        c.drawCentredString((x_edges[3] + x_edges[4]) / 2.0, text_y, w_str)
+        
+        # Purity
+        is_silver = (getattr(it, 'jewellery', None) and getattr(it.jewellery, 'metal_type', '').lower() == 'silver') or it.purity == 0
+        purity_str = "Silver" if is_silver else f"{it.purity:.1f}K" if (it.purity and it.purity > 0) else "-"
+        c.drawCentredString((x_edges[4] + x_edges[5]) / 2.0, text_y, purity_str)
+        
+        # Rate / g
+        rate_str = f"{it.rate_per_gram:,.2f}" if (it.rate_per_gram and it.rate_per_gram > 0) else "-"
+        c.drawCentredString((x_edges[5] + x_edges[6]) / 2.0, text_y, rate_str)
+        
+        # Making (₹)
+        making_str = f"{it.making_charges:,.2f}" if (it.making_charges and it.making_charges > 0) else "0.00"
+        c.drawCentredString((x_edges[6] + x_edges[7]) / 2.0, text_y, making_str)
+        
+        # GST (₹)
+        if getattr(bill, 'apply_gst', True):
+            it_gst = it.gst_amount if (it.gst_amount and it.gst_amount > 0) else round(it.total_price * 0.03, 2)
         else:
-            table_data.append([
-                item.jewellery_name,
-                str(item.quantity),
-                f"{item.weight:.2f}",
-                f"{item.purity}K",
-                f"₹{item.rate_per_gram:.2f}",
-                f"₹{item.making_charges:.2f}",
-                f"₹{item.gst_amount:.2f}",
-                f"₹{item.total_price:.2f}"
-            ])
-    
-    # Add totals rows
-    table_data.append(['', '', '', '', '', '', 'Subtotal:', f"₹{bill.subtotal:.2f}"])
-    
-    if getattr(bill, 'discount_amount', 0) and bill.discount_amount > 0:
-        disc_label = f"Discount ({bill.discount_percentage:.1f}%):" if getattr(bill, 'discount_percentage', 0) else "Discount:"
-        table_data.append(['', '', '', '', '', '', disc_label, f"-₹{bill.discount_amount:.2f}"])
-    
-    if getattr(bill, 'apply_gst', True):
-        table_data.append(['', '', '', '', '', '', 'GST (3%):', f"₹{bill.gst_amount:.2f}"])
-    else:
-        table_data.append(['', '', '', '', '', '', 'GST (0% - OFF):', "₹0.00"])
+            it_gst = 0.0
+        c.drawCentredString((x_edges[7] + x_edges[8]) / 2.0, text_y, f"{it_gst:,.2f}")
         
-    table_data.append(['', '', '', '', '', '', 'Grand Total:', f"₹{bill.total_amount:.2f}"])
-    
-    table = Table(table_data, colWidths=[2*inch, 0.5*inch, 1*inch, 0.75*inch, 0.75*inch, 0.75*inch, 0.75*inch, 0.75*inch])
-    table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 10),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-        ('BACKGROUND', (0, -1), (-1, -1), colors.lightgrey),
-        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black),
-        ('BOX', (0, 0), (-1, -1), 2, colors.black),
-    ]))
-    elements.append(table)
-    
-    elements.append(Spacer(1, 20))
-    
-    # Add payment details
-    paid_amt = getattr(bill, 'paid_amount', 0.0) or (bill.total_amount if bill.payment_status == 'paid' else 0.0)
-    pending_amt = getattr(bill, 'pending_amount', 0.0) or max(0.0, bill.total_amount - paid_amt)
-
-    payment_info = [
-        [Paragraph(f"<b>Payment Status:</b> {bill.payment_status.upper()}", styles['Normal'])],
-        [Paragraph(f"<b>Payment Mode:</b> {bill.payment_method.upper()}", styles['Normal'])],
-        [Paragraph(f"<b>Amount Paid:</b> ₹{paid_amt:.2f}", styles['Normal'])],
-        [Paragraph(f"<b>Pending / Balance Due:</b> ₹{pending_amt:.2f}", styles['Normal'])],
-    ]
-    
-    for info in payment_info:
-        elements.append(info[0])
-
-    # Add Payment Installments History table if multiple payments exist
-    if payments and len(payments) > 0:
-        elements.append(Spacer(1, 10))
-        elements.append(Paragraph("<b>Payment Receipts & Installments:</b>", styles['Normal']))
-        elements.append(Spacer(1, 5))
+        # Amount (₹)
+        it_total = round(it.total_price + it_gst, 2)
+        c.drawRightString(x_edges[9] - 8, text_y, f"{it_total:,.2f}")
         
-        pay_table_data = [['#', 'Date', 'Amount Paid', 'Mode', 'Notes']]
-        for idx, p in enumerate(payments, 1):
-            p_date_str = p.payment_date.strftime('%Y-%m-%d %H:%M') if p.payment_date else '-'
-            pay_table_data.append([
-                str(idx),
-                p_date_str,
-                f"₹{p.amount:.2f}",
-                (p.payment_method or "cash").upper(),
-                p.notes or "-"
-            ])
-            
-        pay_table = Table(pay_table_data, colWidths=[0.4*inch, 1.8*inch, 1.5*inch, 1.2*inch, 2.6*inch])
-        pay_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 8),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-        ]))
-        elements.append(pay_table)
+        cur_y = row_bot
+        
+    # Draw Continuous Vertical Gridlines all the way down to totals_top
+    c.setStrokeColor(colors.HexColor('#9CA3AF'))
+    c.setLineWidth(0.65)
+    c.line(x_left, header_top, x_right, header_top)
+    c.line(x_left, header_bot, x_right, header_bot)
+    c.line(x_left, totals_top, x_right, totals_top)
+    
+    for edge in x_edges:
+        c.line(edge, header_top, edge, totals_top)
+        
+    # 5. Totals Box (Right Aligned under Making / GST / Amount columns)
+    x_tot_left = x_edges[6]  # Starts aligned with column 6
+    x_tot_mid = x_edges[8]   # Split between label and value
+    
+    has_discount = getattr(bill, 'discount_amount', 0.0) and bill.discount_amount > 0
+    t_row_h = 21.0
+    num_tot_rows = 4 if has_discount else 3
+    totals_box_h = (num_tot_rows - 1) * t_row_h + 25.0
+    totals_bot = totals_top - totals_box_h
+    
+    # Outer box & row lines
+    c.setStrokeColor(colors.HexColor('#9CA3AF'))
+    c.setLineWidth(0.65)
+    c.rect(x_tot_left, totals_bot, x_right - x_tot_left, totals_top - totals_bot, stroke=1, fill=0)
+    c.line(x_tot_mid, totals_top, x_tot_mid, totals_bot)
+    
+    # Highlight final Total row in champagne beige
+    c.setFillColor(colors.HexColor('#F5EBE1'))
+    c.rect(x_tot_left, totals_bot, x_right - x_tot_left, 25.0, stroke=0, fill=1)
+    
+    curr_t_y = totals_top
+    
+    # Row 1: Subtotal
+    c.line(x_tot_left, curr_t_y - t_row_h, x_right, curr_t_y - t_row_h)
+    c.setFont("Helvetica", 8.5)
+    c.setFillColor(colors.HexColor('#111827'))
+    c.drawString(x_tot_left + 8, curr_t_y - 14.5, "Subtotal")
+    draw_currency(c, x_right - 8, curr_t_y - 14.5, bill.subtotal, font_size=8.5, bold=False, align="right")
+    curr_t_y -= t_row_h
+    
+    # Optional Discount Row
+    if has_discount:
+        c.line(x_tot_left, curr_t_y - t_row_h, x_right, curr_t_y - t_row_h)
+        disc_label = f"Discount ({bill.discount_percentage:.1f}%)" if getattr(bill, 'discount_percentage', 0) else "Discount"
+        c.setFont("Helvetica", 8.5)
+        c.drawString(x_tot_left + 8, curr_t_y - 14.5, disc_label)
+        draw_currency(c, x_right - 8, curr_t_y - 14.5, -bill.discount_amount, font_size=8.5, bold=False, align="right")
+        curr_t_y -= t_row_h
+        
+    # Row 2: GST
+    c.line(x_tot_left, curr_t_y - t_row_h, x_right, curr_t_y - t_row_h)
+    gst_label = "GST (3%)" if getattr(bill, 'apply_gst', True) else "GST (0%)"
+    gst_val = bill.gst_amount if getattr(bill, 'apply_gst', True) else 0.0
+    c.setFont("Helvetica", 8.5)
+    c.drawString(x_tot_left + 8, curr_t_y - 14.5, gst_label)
+    draw_currency(c, x_right - 8, curr_t_y - 14.5, gst_val, font_size=8.5, bold=False, align="right")
+    curr_t_y -= t_row_h
+    
+    # Row 3: Total
+    c.setFont("Helvetica-Bold", 10.5)
+    c.setFillColor(colors.HexColor('#111827'))
+    c.drawString(x_tot_left + 8, totals_bot + 7.5, "Total")
+    draw_currency(c, x_right - 8, totals_bot + 7.5, bill.total_amount, font_size=10.5, bold=True, align="right")
+    
+    # 6. Bottom Info (Amount in words & Notes)
+    y_words = 196.0
+    c.setFont("Helvetica-Bold", 8)
+    c.setFillColor(colors.HexColor('#111827'))
+    c.drawString(28, y_words, "Amount in words : ")
+    prefix_w = c.stringWidth("Amount in words : ", "Helvetica-Bold", 8)
+    
+    words_str = num_to_words_indian(bill.total_amount)
+    c.setFont("Helvetica", 7.5)
+    c.drawString(28 + prefix_w, y_words, words_str)
     
     if bill.notes:
-        elements.append(Spacer(1, 10))
-        elements.append(Paragraph(f"<b>Notes:</b> {bill.notes}", styles['Normal']))
+        y_notes = y_words - 20.0
+        c.setFont("Helvetica-Bold", 8)
+        c.drawString(28, y_notes, "Notes : ")
+        notes_w = c.stringWidth("Notes : ", "Helvetica-Bold", 8)
+        c.setFont("Helvetica", 8)
+        c.drawString(28 + notes_w, y_notes, str(bill.notes))
+        
+    # 7. Footer
+    # Left: Thank you for your purchase! (in elegant dark maroon italic with underline)
+    c.setFont("Times-Italic", 12.5)
+    c.setFillColor(colors.HexColor('#5C1D0E'))
+    c.drawString(28, 96, "Thank you for your purchase!")
+    c.setStrokeColor(colors.HexColor('#D1D5DB'))
+    c.setLineWidth(0.6)
+    c.line(28, 90, 185, 90)
     
-    elements.append(Spacer(1, 30))
-    elements.append(Paragraph("Thank you for your purchase!", styles['Normal']))
+    # Right: Authorised Signatory with line
+    c.setStrokeColor(colors.HexColor('#6B7280'))
+    c.setLineWidth(0.8)
+    c.line(420, 100, 560, 100)
+    c.setFont("Helvetica-Bold", 8.5)
+    c.setFillColor(colors.HexColor('#1F2937'))
+    c.drawCentredString(490, 86, "Authorised Signatory")
     
-    # Build PDF
-    doc.build(elements)
+    # Very Bottom Center: —— A BOND FOR GENERATIONS ——
+    c.setStrokeColor(colors.HexColor('#9CA3AF'))
+    c.setLineWidth(0.6)
+    c.line(160, 44, 230, 44)
+    c.setFont("Helvetica", 7.5)
+    c.setFillColor(colors.HexColor('#374151'))
+    c.drawCentredString(297.6, 41, "A   B O N D   F O R   G E N E R A T I O N S")
+    c.line(365, 44, 435, 44)
     
+    # Finalize Page
+    c.showPage()
+    c.save()
     return pdf_path
 
 @router.post("/{bill_id}/payments", response_model=BillResponse)
+
 async def add_bill_payment(
     bill_id: int,
     payment_in: BillPaymentCreate,
@@ -492,7 +761,6 @@ async def get_bill_pdf(
         raise HTTPException(status_code=404, detail="Bill not found")
     
     pdf_path = f"invoices/{bill.invoice_number}.pdf"
-    if not os.path.exists(pdf_path):
-        generate_pdf_invoice(bill_id, db)
+    generate_pdf_invoice(bill_id, db)
     
     return FileResponse(pdf_path, filename=f"{bill.invoice_number}.pdf")
