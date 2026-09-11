@@ -31,7 +31,10 @@ app.add_middleware(
 )
 
 # Create tables
-Base.metadata.create_all(bind=engine)
+try:
+    Base.metadata.create_all(bind=engine)
+except Exception as db_err:
+    print(f"Database initialization notice: {db_err}")
 
 from fastapi.staticfiles import StaticFiles
 import os
@@ -40,12 +43,22 @@ import os
 os.makedirs("uploads/products", exist_ok=True)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
-# Root and Health Check endpoint for Render
+# Root and Health Check endpoint
 @app.get("/")
 @app.get("/health")
-async def health_check():
+async def health_check(db: Session = Depends(get_db)):
+    db_ok = True
+    db_msg = "connected"
+    try:
+        from sqlalchemy import text
+        db.execute(text("SELECT 1"))
+    except Exception as e:
+        db_ok = False
+        db_msg = f"db error: {str(e)[:100]}"
     return {
         "status": "online",
+        "database": db_msg,
+        "database_connected": db_ok,
         "service": "Jewellery Shop ERP Backend",
         "version": "1.0.0"
     }

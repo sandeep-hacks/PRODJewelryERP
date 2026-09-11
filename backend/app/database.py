@@ -19,6 +19,9 @@ elif DATABASE_URL.startswith("postgresql://") and "+psycopg" not in DATABASE_URL
     except ImportError:
         pass
 
+# Strip channel_binding which causes handshake failures with Neon connection poolers
+DATABASE_URL = DATABASE_URL.replace("&channel_binding=require", "").replace("channel_binding=require&", "").replace("?channel_binding=require", "")
+
 # Check if using SQLite or PostgreSQL
 if DATABASE_URL.startswith("sqlite"):
     engine = create_engine(

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { useCachedApi, invalidateCache } from '../utils/cache';
+import { useCachedApi, invalidateCache, setCachedData } from '../utils/cache';
 import { FiSave, FiRefreshCw, FiTrendingUp, FiCheckCircle } from 'react-icons/fi';
 import { IoDiamondOutline } from 'react-icons/io5';
 
@@ -47,17 +47,21 @@ const GoldRate = () => {
     setSubmitting(true);
     
     try {
-      await api.post('/gold-rate/', {
+      const res = await api.post('/gold-rate/', {
         gold_rate_24k: parseFloat(rates.gold_rate_24k),
         gold_rate_22k: parseFloat(rates.gold_rate_22k),
         gold_rate_18k: parseFloat(rates.gold_rate_18k),
         silver_rate: parseFloat(rates.silver_rate)
       });
       
-      toast.success('Metal rates updated and synchronized across all terminals');
+      if (res.data) {
+        setCachedData('/gold-rate/', res.data);
+        setCachedData('/gold-rate', res.data);
+      }
       invalidateCache('/gold-rate');
       invalidateCache('/dashboard');
       refetch();
+      toast.success('Metal rates updated and synchronized across all terminals');
     } catch (error) {
       toast.error('Failed to update rates');
     } finally {

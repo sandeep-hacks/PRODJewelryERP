@@ -64,7 +64,19 @@ const Inventory = () => {
   // Live metal rates to compute real-time retail valuation on the fly
   const { data: goldRate } = useCachedApi('/gold-rate/', { ttl: 60000 });
   const rate24k = goldRate?.gold_rate_24k || 7250;
+  const rate22k = goldRate?.gold_rate_22k || Math.round((rate24k * 22) / 24);
+  const rate18k = goldRate?.gold_rate_18k || Math.round((rate24k * 18) / 24);
   const silverRate = goldRate?.silver_rate || 89;
+
+  const getEffectiveRate = (metalType, purity) => {
+    if (!goldRate) return (metalType || '').toLowerCase() === 'silver' ? 89 : 7250;
+    if ((metalType || '').toLowerCase() === 'silver') return silverRate;
+    const p = Number(purity) || 22;
+    if (Math.abs(p - 24) < 0.2) return rate24k;
+    if (Math.abs(p - 22) < 0.2) return rate22k;
+    if (Math.abs(p - 18) < 0.2) return rate18k;
+    return (rate24k * p) / 24;
+  };
 
   const [formData, setFormData] = useState({
     name: '',
@@ -238,14 +250,13 @@ const Inventory = () => {
   // Real-time calculation helper
   const calculateItemPrice = (item) => {
     const isGold = item.metal_type?.toLowerCase() === 'gold';
-    const baseRate = isGold ? rate24k : silverRate;
     const weight = Number(item.weight) || 0;
     const purity = Number(item.purity) || 22;
     const makingPerGram = Number(item.making_charges) || 0;
     const wastage = Number(item.wastage_percentage) || 0;
 
-    // For Gold: weight * rate24k * (purity / 24). For Silver: weight * silverRate
-    const metalValue = isGold ? weight * baseRate * (purity / 24) : weight * baseRate;
+    const baseRate = getEffectiveRate(item.metal_type, purity);
+    const metalValue = weight * baseRate;
     const totalMaking = weight * makingPerGram;
     const wastageCharges = metalValue * (wastage / 100);
     const subtotal = metalValue + totalMaking + wastageCharges;

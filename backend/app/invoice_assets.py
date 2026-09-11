@@ -9,7 +9,39 @@ HEADER_LOGO_PATH = os.path.join(ASSETS_DIR, "shravan_header.png")
 WATERMARK_PATH = os.path.join(ASSETS_DIR, "shravan_watermark.png")
 DIAMOND_ICON_PATH = os.path.join(ASSETS_DIR, "diamond_icon.png")
 
+LOCAL_DEVANAGARI_FONT = os.path.join(ASSETS_DIR, "NotoSansDevanagari-Bold.ttf")
+
+def ensure_devanagari_font():
+    if os.path.exists(LOCAL_DEVANAGARI_FONT) and os.path.getsize(LOCAL_DEVANAGARI_FONT) > 10000:
+        return LOCAL_DEVANAGARI_FONT
+    urls = [
+        "https://github.com/openmaptiles/fonts/raw/master/noto-sans/NotoSansDevanagari-Bold.ttf",
+        "https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSansDevanagari/NotoSansDevanagari-Bold.ttf"
+    ]
+    import urllib.request
+    import ssl
+    ctx = ssl._create_unverified_context()
+    for u in urls:
+        try:
+            req = urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=3, context=ctx) as r:
+                if r.status == 200:
+                    with open(LOCAL_DEVANAGARI_FONT, "wb") as f:
+                        f.write(r.read())
+                    if os.path.exists(LOCAL_DEVANAGARI_FONT) and os.path.getsize(LOCAL_DEVANAGARI_FONT) > 10000:
+                        return LOCAL_DEVANAGARI_FONT
+        except Exception:
+            continue
+    return None
+
 def get_devanagari_font(size=44):
+    local_font = ensure_devanagari_font()
+    if local_font and os.path.exists(local_font):
+        try:
+            return ImageFont.truetype(local_font, size)
+        except Exception as e:
+            print(f"Error loading local Devanagari font: {e}")
+
     candidates = [
         "/System/Library/Fonts/Supplemental/DevanagariMT.ttc",
         "/System/Library/Fonts/Supplemental/ITFDevanagari.ttc",

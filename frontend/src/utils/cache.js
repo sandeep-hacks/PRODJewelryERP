@@ -38,24 +38,43 @@ export const setCachedData = (key, data) => {
     timestamp: Date.now(),
   });
 
+  // Notify exact match listeners
   const listeners = cacheListeners.get(key);
   if (listeners) {
     listeners.forEach((callback) => callback(data));
   }
+
+  // Also notify listeners if key has or lacks trailing slash
+  const altKey = key.endsWith('/') ? key.slice(0, -1) : `${key}/`;
+  const altListeners = cacheListeners.get(altKey);
+  if (altListeners) {
+    altListeners.forEach((callback) => callback(data));
+  }
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('app-cache-updated', { detail: { key, data } }));
+  }
 };
 
 /**
- * Invalidate specific cache key or keys matching prefix
+ * Invalidate specific cache key or keys matching prefix and trigger active listeners
  */
 export const invalidateCache = (pattern) => {
   if (!pattern) {
     memoryCache.clear();
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('app-cache-invalidated', { detail: { pattern: '' } }));
+    }
     return;
   }
   for (const key of memoryCache.keys()) {
     if (key.includes(pattern)) {
       memoryCache.delete(key);
     }
+  }
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('app-cache-invalidated', { detail: { pattern } }));
   }
 };
 
@@ -148,8 +167,22 @@ export const useCachedApi = (url, options = {}) => {
       fetchData(false);
     }
 
+    const handleInvalidation = (e) => {
+      const pattern = e.detail?.pattern;
+      if (!pattern || (url && url.includes(pattern))) {
+        fetchData(true);
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('app-cache-invalidated', handleInvalidation);
+    }
+
     return () => {
       cacheListeners.get(url)?.delete(listener);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('app-cache-invalidated', handleInvalidation);
+      }
     };
   }, [url, enabled, ttl, fetchData]);
 

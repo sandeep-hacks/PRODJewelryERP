@@ -23,7 +23,9 @@ import {
   FiPlusCircle,
   FiList,
   FiAlertCircle,
-  FiCheck
+  FiCheck,
+  FiChevronDown,
+  FiChevronUp
 } from 'react-icons/fi';
 
 const ALPHABETS = ['ALL', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')];
@@ -35,6 +37,9 @@ const CustomerHistory = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedLetter, setSelectedLetter] = useState('ALL');
   const [loadingBills, setLoadingBills] = useState(false);
+  const [activeTab, setActiveTab] = useState('dues'); // 'dues' or 'directory'
+  const [duesSearch, setDuesSearch] = useState('');
+  const [expandedCustomerIds, setExpandedCustomerIds] = useState({});
 
   // Installment payment modal state
   const [activePaymentBill, setActivePaymentBill] = useState(null);
@@ -48,6 +53,7 @@ const CustomerHistory = () => {
 
   // Debounced search term for smooth searching
   const debouncedSearch = useDebounce(searchTerm, 200);
+  const debouncedDuesSearch = useDebounce(duesSearch, 200);
 
   // Fetch all customers by default (or filtered by search query)
   const customersEndpoint = debouncedSearch
@@ -60,6 +66,41 @@ const CustomerHistory = () => {
   });
 
   const allCustomers = Array.isArray(rawCustomers) ? rawCustomers : [];
+
+  // Fetch dues data
+  const duesEndpoint = debouncedDuesSearch
+    ? `/billing/dues?search=${encodeURIComponent(debouncedDuesSearch)}`
+    : '/billing/dues';
+
+  const { data: rawDues, loading: loadingDues, refetch: refetchDues } = useCachedApi(duesEndpoint, {
+    ttl: 30000,
+    initialData: { summary: { total_outstanding_due: 0, total_due_customers: 0, total_pending_invoices: 0 }, customers: [] }
+  });
+
+  const duesData = rawDues || { summary: { total_outstanding_due: 0, total_due_customers: 0, total_pending_invoices: 0 }, customers: [] };
+
+  const toggleCustomerExpand = (custId) => {
+    setExpandedCustomerIds(prev => ({
+      ...prev,
+      [custId]: !prev[custId]
+    }));
+  };
+
+  const isAllExpanded = useMemo(() => {
+    const list = duesData.customers || [];
+    if (list.length === 0) return false;
+    return list.every(c => expandedCustomerIds[c.id]);
+  }, [duesData.customers, expandedCustomerIds]);
+
+  const toggleAllExpand = () => {
+    if (isAllExpanded) {
+      setExpandedCustomerIds({});
+    } else {
+      const next = {};
+      (duesData.customers || []).forEach(c => { next[c.id] = true; });
+      setExpandedCustomerIds(next);
+    }
+  };
 
   // Filter & sort alphabetically (A to Z)
   const sortedAndFilteredCustomers = useMemo(() => {
@@ -160,8 +201,12 @@ const CustomerHistory = () => {
       setPaymentAmount('');
       setPaymentNotes('');
 
-      // Refresh customer's bills
-      await fetchCustomerBills(selectedCustomer.id);
+      // Refresh customer's bills if a customer is selected
+      if (selectedCustomer) {
+        await fetchCustomerBills(selectedCustomer.id);
+      }
+      refetchDues();
+      invalidateCache('/billing/dues');
       invalidateCache('/billing');
       invalidateCache('/dashboard');
       invalidateCache('/customers');
@@ -207,137 +252,496 @@ const CustomerHistory = () => {
         )}
       </div>
 
-      {/* When NO customer is selected: Show Alphabetical Directory */}
+      {/* When NO customer is selected: Show Tabs for Dues vs Directory */}
       {!selectedCustomer && (
-        <div className="space-y-4">
-          {/* Search Bar & Alphabet Indexer */}
-          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm space-y-4">
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
-              <div className="relative w-full sm:max-w-md">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                  <FiSearch size={16} />
-                </div>
-                <input
-                  type="text"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full pl-10 pr-9 py-2.5 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 transition"
-                  placeholder="Search customer by name, mobile number, or ID..."
-                />
-                {searchTerm && (
-                  <button
-                    onClick={() => setSearchTerm('')}
-                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
-                  >
-                    <FiX size={14} />
-                  </button>
+        <div className="space-y-5">
+          {/* View Mode Switcher Tabs */}
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div className="flex items-center p-1 bg-slate-100/90 rounded-2xl border border-slate-200/80">
+              <button
+                type="button"
+                onClick={() => setActiveTab('dues')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                  activeTab === 'dues'
+                    ? 'bg-white text-slate-900 shadow-sm border border-slate-200/80'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <FiAlertCircle className={duesData?.summary?.total_due_customers > 0 ? 'text-amber-600' : 'text-slate-400'} size={15} />
+                <span>Outstanding Dues</span>
+                {duesData?.summary?.total_due_customers > 0 && (
+                  <span className="px-2 py-0.5 bg-amber-500 text-white text-[10px] font-extrabold rounded-full">
+                    {duesData.summary.total_due_customers}
+                  </span>
                 )}
-              </div>
+              </button>
 
-              <div className="text-xs text-slate-500 font-semibold flex items-center gap-1.5">
-                <FiUsers className="text-amber-600" />
-                <span>Showing {sortedAndFilteredCustomers.length} of {allCustomers.length} customer{allCustomers.length !== 1 ? 's' : ''} (A-Z)</span>
-              </div>
+              <button
+                type="button"
+                onClick={() => setActiveTab('directory')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                  activeTab === 'directory'
+                    ? 'bg-white text-slate-900 shadow-sm border border-slate-200/80'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <FiUsers className="text-amber-600" size={15} />
+                <span>All Customers & Invoices ({allCustomers.length})</span>
+              </button>
             </div>
 
-            {/* Alphabetical A-Z Quick Filter Bar */}
-            <div className="pt-2 border-t border-slate-100">
-              <div className="flex items-center gap-1 overflow-x-auto pb-1 scrollbar-thin">
-                {ALPHABETS.map((letter) => {
-                  const isSelected = selectedLetter === letter;
-                  return (
-                    <button
-                      key={letter}
-                      type="button"
-                      onClick={() => setSelectedLetter(letter)}
-                      className={`min-w-[28px] h-7 px-1.5 rounded-lg text-[11px] font-bold transition flex items-center justify-center shrink-0 ${
-                        isSelected
-                          ? 'bg-amber-500 text-white shadow-xs'
-                          : 'bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-slate-200/60'
-                      }`}
-                    >
-                      {letter}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+            {activeTab === 'dues' && (
+              <button
+                onClick={() => refetchDues()}
+                title="Refresh dues data"
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 text-slate-600 hover:text-slate-900 text-xs font-semibold rounded-xl shadow-xs transition"
+              >
+                <FiClock size={13} className={loadingDues ? 'animate-spin text-amber-600' : ''} />
+                <span>Refresh Dues</span>
+              </button>
+            )}
           </div>
 
-          {/* Customer Directory List / Grid */}
-          {loadingCustomers && allCustomers.length === 0 ? (
-            <div className="p-12 text-center bg-white rounded-2xl border border-slate-200/80">
-              <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-amber-600 mx-auto"></div>
-              <p className="text-xs text-slate-400 mt-2 font-medium">Loading customer directory...</p>
-            </div>
-          ) : sortedAndFilteredCustomers.length === 0 ? (
-            <div className="bg-white rounded-2xl border border-slate-200/80 p-10 text-center">
-              <FiUsers className="w-10 h-10 text-slate-300 mx-auto mb-2" />
-              <p className="text-sm font-semibold text-slate-700">No customers found</p>
-              <p className="text-xs text-slate-400 mt-1">
-                {selectedLetter !== 'ALL' 
-                  ? `No customer names begin with the letter "${selectedLetter}". Try clicking "ALL" or searching.` 
-                  : searchTerm ? 'No matching customer names or numbers found.' : 'No customers registered yet.'}
-              </p>
-              {(selectedLetter !== 'ALL' || searchTerm) && (
-                <button
-                  type="button"
-                  onClick={() => { setSelectedLetter('ALL'); setSearchTerm(''); }}
-                  className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-amber-600 hover:underline"
-                >
-                  Clear filters & view all customers
-                </button>
-              )}
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
-              {sortedAndFilteredCustomers.map((cust) => {
-                const initial = (cust.name || 'C').trim().charAt(0).toUpperCase();
-                return (
-                  <div
-                    key={cust.id}
-                    onClick={() => selectCustomer(cust)}
-                    className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs hover:shadow-md hover:border-amber-400/80 transition-all cursor-pointer flex flex-col justify-between group"
-                  >
-                    <div>
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-500 to-amber-400 text-white font-bold text-sm flex items-center justify-center shrink-0 shadow-xs shadow-amber-500/20 group-hover:scale-105 transition-transform">
-                            {initial}
+          {/* TAB 1: OUTSTANDING DUES SECTION */}
+          {activeTab === 'dues' && (
+            <div className="space-y-5">
+              {/* Summary Metric Cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                {/* Total Shop Outstanding Dues */}
+                <div className="bg-gradient-to-br from-rose-500/10 via-amber-500/5 to-white p-5 rounded-2xl border border-rose-200/80 shadow-xs flex items-center justify-between">
+                  <div>
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-rose-800">
+                      Total Outstanding Due
+                    </span>
+                    <div className="text-2xl font-extrabold text-slate-900 mt-1">
+                      ₹{Number(duesData.summary.total_outstanding_due || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-0.5">Total unpaid balance across all customer bills</p>
+                  </div>
+                  <div className="w-12 h-12 rounded-2xl bg-rose-500 text-white flex items-center justify-center font-bold shadow-md shadow-rose-500/20">
+                    <FiDollarSign size={22} />
+                  </div>
+                </div>
+
+                {/* Customers with Dues */}
+                <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between">
+                  <div>
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                      Customers with Dues
+                    </span>
+                    <div className="text-2xl font-extrabold text-slate-900 mt-1">
+                      {duesData.summary.total_due_customers || 0}
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-0.5">Accounts with partial or pending invoices</p>
+                  </div>
+                  <div className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-600 flex items-center justify-center font-bold">
+                    <FiUsers size={22} />
+                  </div>
+                </div>
+
+                {/* Pending Invoices */}
+                <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between">
+                  <div>
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                      Pending Invoices
+                    </span>
+                    <div className="text-2xl font-extrabold text-slate-900 mt-1">
+                      {duesData.summary.total_pending_invoices || 0}
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-0.5">Invoices with remaining balances</p>
+                  </div>
+                  <div className="w-12 h-12 rounded-2xl bg-slate-100 text-slate-700 flex items-center justify-center font-bold">
+                    <FiFileText size={22} />
+                  </div>
+                </div>
+              </div>
+
+              {/* Dues Search Bar & Expand All Controls */}
+              <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-3">
+                <div className="relative w-full sm:max-w-md">
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                    <FiSearch size={16} />
+                  </div>
+                  <input
+                    type="text"
+                    value={duesSearch}
+                    onChange={(e) => setDuesSearch(e.target.value)}
+                    className="w-full pl-10 pr-9 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 transition"
+                    placeholder="Search due customer by name, mobile, or invoice #..."
+                  />
+                  {duesSearch && (
+                    <button
+                      onClick={() => setDuesSearch('')}
+                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
+                    >
+                      <FiX size={14} />
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between w-full sm:w-auto gap-3">
+                  <span className="text-xs text-slate-500 font-medium">
+                    Showing <b>{duesData.customers?.length || 0}</b> customer account{duesData.customers?.length !== 1 ? 's' : ''} with active dues
+                  </span>
+
+                  {duesData.customers?.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={toggleAllExpand}
+                      className="px-3 py-1.5 text-xs font-bold text-slate-700 hover:text-amber-700 bg-slate-100 hover:bg-amber-50 border border-slate-200 hover:border-amber-300 rounded-lg transition shrink-0"
+                    >
+                      {isAllExpanded ? 'Collapse All' : 'Expand All'}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Dues List or Empty State */}
+              {loadingDues && (!duesData.customers || duesData.customers.length === 0) ? (
+                <div className="p-12 text-center bg-white rounded-2xl border border-slate-200/80">
+                  <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-amber-600 mx-auto"></div>
+                  <p className="text-xs text-slate-400 mt-2 font-medium">Loading customer due balances...</p>
+                </div>
+              ) : !duesData.customers || duesData.customers.length === 0 ? (
+                <div className="bg-white rounded-2xl border border-slate-200/80 p-12 text-center space-y-3">
+                  <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto shadow-xs">
+                    <FiCheckCircle size={32} />
+                  </div>
+                  <h3 className="text-base font-bold text-slate-800">All Customer Accounts Clear!</h3>
+                  <p className="text-xs text-slate-500 max-w-md mx-auto">
+                    {duesSearch
+                      ? `No pending due customers match "${duesSearch}". Try clearing your search.`
+                      : 'There are currently no customers with pending or partial payments. All issued invoices have been settled in full.'}
+                  </p>
+                  {duesSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setDuesSearch('')}
+                      className="text-xs font-semibold text-amber-600 hover:underline inline-block mt-2"
+                    >
+                      Clear search filter
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {duesData.customers.map((cust) => {
+                    const initial = (cust.name || 'C').trim().charAt(0).toUpperCase();
+                    const isExpanded = !!expandedCustomerIds[cust.id];
+                    const billsCount = cust.bills?.length || 0;
+
+                    return (
+                      <div
+                        key={cust.id}
+                        className={`bg-white rounded-2xl border transition-all duration-200 overflow-hidden ${
+                          isExpanded
+                            ? 'border-amber-300 shadow-md ring-1 ring-amber-300/30'
+                            : 'border-slate-200/80 hover:border-slate-300 shadow-xs hover:shadow-sm'
+                        }`}
+                      >
+                        {/* Compact Clickable Customer Due Header */}
+                        <div
+                          onClick={() => toggleCustomerExpand(cust.id)}
+                          className="p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer select-none hover:bg-slate-50/70 transition-colors"
+                        >
+                          {/* Left: Avatar + Details */}
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-rose-500 to-amber-500 text-white font-extrabold text-sm sm:text-base flex items-center justify-center shrink-0 shadow-xs shadow-rose-500/20">
+                              {initial}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <h3 className="text-sm sm:text-base font-bold text-slate-900 truncate">{cust.name}</h3>
+                                <span className="text-[10px] font-mono font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md border border-slate-200">
+                                  {cust.customer_id}
+                                </span>
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-200/80">
+                                  <FiFileText size={11} className="text-amber-600" />
+                                  {billsCount} {billsCount === 1 ? 'Bill Partial' : 'Bills Partial'}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-3 text-xs text-slate-500 mt-1 flex-wrap font-medium">
+                                <span className="flex items-center gap-1">
+                                  <FiPhone size={12} className="text-slate-400" />
+                                  <span className="font-semibold text-slate-700">{cust.phone}</span>
+                                </span>
+                                {cust.address && (
+                                  <span className="flex items-center gap-1 text-slate-400 truncate max-w-xs">
+                                    <FiMapPin size={12} className="shrink-0" />
+                                    <span className="truncate">{cust.address}</span>
+                                  </span>
+                                )}
+                              </div>
+                            </div>
                           </div>
-                          <div className="min-w-0">
-                            <h3 className="text-sm font-bold text-slate-900 group-hover:text-amber-600 transition-colors truncate">
-                              {cust.name}
-                            </h3>
-                            <p className="text-xs text-slate-500 font-medium flex items-center gap-1 mt-0.5">
-                              <FiPhone size={11} className="text-slate-400" />
-                              <span>{cust.phone}</span>
-                            </p>
+
+                          {/* Right: Due Amount & Action Buttons */}
+                          <div className="flex items-center justify-between sm:justify-end gap-3 sm:gap-4 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100">
+                            <div className="text-left sm:text-right px-3 py-1 bg-rose-50 rounded-xl border border-rose-200/80">
+                              <span className="text-[9px] font-extrabold text-rose-800 uppercase tracking-wider block">
+                                Total Balance Due
+                              </span>
+                              <span className="text-base sm:text-lg font-black text-rose-600 font-mono">
+                                ₹{Number(cust.total_due).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  selectCustomer(cust);
+                                }}
+                                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs rounded-xl border border-slate-200 transition flex items-center gap-1"
+                                title="Open complete customer ledger and history"
+                              >
+                                <span>Ledger</span>
+                                <span className="text-slate-400">→</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleCustomerExpand(cust.id);
+                                }}
+                                className={`px-3 py-1.5 text-xs font-bold rounded-xl border transition flex items-center gap-1.5 ${
+                                  isExpanded
+                                    ? 'bg-amber-100 text-amber-900 border-amber-300 shadow-xs'
+                                    : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200'
+                                }`}
+                              >
+                                <span>{isExpanded ? 'Hide Bills' : 'View Bills'}</span>
+                                <FiChevronDown
+                                  size={14}
+                                  className={`transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`}
+                                />
+                              </button>
+                            </div>
                           </div>
                         </div>
 
-                        <span className="text-[10px] font-mono font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md border border-slate-200 shrink-0">
-                          {cust.customer_id}
-                        </span>
+                        {/* Expandable Unpaid / Partial Invoices Breakdown */}
+                        {isExpanded && (
+                          <div className="border-t border-slate-200 bg-slate-50/60">
+                            <div className="px-4 py-2 bg-gradient-to-r from-amber-50/70 to-rose-50/40 border-b border-amber-100 flex items-center justify-between text-xs text-slate-600 font-medium flex-wrap gap-2">
+                              <div className="flex items-center gap-2">
+                                <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
+                                <span>Showing <b>{billsCount}</b> partial/pending invoice{billsCount !== 1 ? 's' : ''} for <b>{cust.name}</b></span>
+                              </div>
+                              <span className="text-[11px] text-slate-400">Click Collect Payment to record an installment</span>
+                            </div>
+
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-left text-xs border-collapse">
+                                <thead>
+                                  <tr className="bg-slate-100/80 border-b border-slate-200 text-slate-500 font-semibold text-[11px]">
+                                    <th className="py-2.5 px-4">Invoice #</th>
+                                    <th className="py-2.5 px-4">Date</th>
+                                    <th className="py-2.5 px-4">Total Amount</th>
+                                    <th className="py-2.5 px-4">Paid Amount</th>
+                                    <th className="py-2.5 px-4 text-rose-600 font-bold">Due Balance</th>
+                                    <th className="py-2.5 px-4">Status</th>
+                                    <th className="py-2.5 px-4 text-right">Actions</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100 bg-white">
+                                  {cust.bills.map((b) => (
+                                    <tr key={b.id} className="hover:bg-amber-50/30 transition">
+                                      <td className="py-2.5 px-4 font-mono font-bold text-slate-800">
+                                        {b.invoice_number}
+                                      </td>
+                                      <td className="py-2.5 px-4 text-slate-500">
+                                        {b.bill_date ? new Date(b.bill_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '-'}
+                                      </td>
+                                      <td className="py-2.5 px-4 font-semibold text-slate-900">
+                                        ₹{Number(b.total_amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                      </td>
+                                      <td className="py-2.5 px-4 text-emerald-700 font-semibold">
+                                        ₹{Number(b.paid_amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                      </td>
+                                      <td className="py-2.5 px-4 text-rose-600 font-bold text-sm">
+                                        ₹{Number(b.pending_amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                      </td>
+                                      <td className="py-2.5 px-4">
+                                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                          b.payment_status === 'partial'
+                                            ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                                            : 'bg-rose-100 text-rose-800 border border-rose-200'
+                                        }`}>
+                                          {b.payment_status?.toUpperCase()}
+                                        </span>
+                                      </td>
+                                      <td className="py-2.5 px-4 text-right">
+                                        <div className="inline-flex items-center gap-2">
+                                          <button
+                                            type="button"
+                                            onClick={() => openPaymentModal(b)}
+                                            className="px-3 py-1.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-bold text-[11px] rounded-lg shadow-xs shadow-amber-500/20 transition flex items-center gap-1"
+                                          >
+                                            <FiDollarSign size={12} />
+                                            <span>Collect Payment</span>
+                                          </button>
+
+                                          <button
+                                            type="button"
+                                            onClick={() => handlePrintInvoice(b.id, b.invoice_number)}
+                                            className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg border border-slate-200 transition"
+                                            title="Download Invoice PDF"
+                                          >
+                                            <FiDownload size={13} />
+                                          </button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
                       </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
 
-                      {cust.address && (
-                        <p className="text-[11px] text-slate-400 mt-2.5 flex items-center gap-1 line-clamp-1">
-                          <FiMapPin size={11} className="shrink-0" />
-                          <span className="truncate">{cust.address}</span>
-                        </p>
-                      )}
+          {/* TAB 2: ALL CUSTOMERS DIRECTORY */}
+          {activeTab === 'directory' && (
+            <div className="space-y-4">
+              {/* Search Bar & Alphabet Indexer */}
+              <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm space-y-4">
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+                  <div className="relative w-full sm:max-w-md">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                      <FiSearch size={16} />
                     </div>
-
-                    <div className="mt-3.5 pt-2.5 border-t border-slate-100 flex items-center justify-between text-xs">
-                      <span className="text-[11px] text-slate-400">View Invoices</span>
-                      <span className="font-semibold text-amber-600 group-hover:translate-x-0.5 transition-transform">
-                        Open Ledger →
-                      </span>
-                    </div>
+                    <input
+                      type="text"
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      className="w-full pl-10 pr-9 py-2.5 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 transition"
+                      placeholder="Search customer by name, mobile number, or ID..."
+                    />
+                    {searchTerm && (
+                      <button
+                        onClick={() => setSearchTerm('')}
+                        className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
+                      >
+                        <FiX size={14} />
+                      </button>
+                    )}
                   </div>
-                );
-              })}
+
+                  <div className="text-xs text-slate-500 font-semibold flex items-center gap-1.5">
+                    <FiUsers className="text-amber-600" />
+                    <span>Showing {sortedAndFilteredCustomers.length} of {allCustomers.length} customer{allCustomers.length !== 1 ? 's' : ''} (A-Z)</span>
+                  </div>
+                </div>
+
+                {/* Alphabetical A-Z Quick Filter Bar */}
+                <div className="pt-2 border-t border-slate-100">
+                  <div className="flex items-center gap-1 overflow-x-auto pb-1 scrollbar-thin">
+                    {ALPHABETS.map((letter) => {
+                      const isSelected = selectedLetter === letter;
+                      return (
+                        <button
+                          key={letter}
+                          type="button"
+                          onClick={() => setSelectedLetter(letter)}
+                          className={`min-w-[28px] h-7 px-1.5 rounded-lg text-[11px] font-bold transition flex items-center justify-center shrink-0 ${
+                            isSelected
+                              ? 'bg-amber-500 text-white shadow-xs'
+                              : 'bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-slate-200/60'
+                          }`}
+                        >
+                          {letter}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* Customer Directory List / Grid */}
+              {loadingCustomers && allCustomers.length === 0 ? (
+                <div className="p-12 text-center bg-white rounded-2xl border border-slate-200/80">
+                  <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-amber-600 mx-auto"></div>
+                  <p className="text-xs text-slate-400 mt-2 font-medium">Loading customer directory...</p>
+                </div>
+              ) : sortedAndFilteredCustomers.length === 0 ? (
+                <div className="bg-white rounded-2xl border border-slate-200/80 p-10 text-center">
+                  <FiUsers className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                  <p className="text-sm font-semibold text-slate-700">No customers found</p>
+                  <p className="text-xs text-slate-400 mt-1">
+                    {selectedLetter !== 'ALL' 
+                      ? `No customer names begin with the letter "${selectedLetter}". Try clicking "ALL" or searching.` 
+                      : searchTerm ? 'No matching customer names or numbers found.' : 'No customers registered yet.'}
+                  </p>
+                  {(selectedLetter !== 'ALL' || searchTerm) && (
+                    <button
+                      type="button"
+                      onClick={() => { setSelectedLetter('ALL'); setSearchTerm(''); }}
+                      className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-amber-600 hover:underline"
+                    >
+                      Clear filters & view all customers
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                  {sortedAndFilteredCustomers.map((cust) => {
+                    const initial = (cust.name || 'C').trim().charAt(0).toUpperCase();
+                    return (
+                      <div
+                        key={cust.id}
+                        onClick={() => selectCustomer(cust)}
+                        className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs hover:shadow-md hover:border-amber-400/80 transition-all cursor-pointer flex flex-col justify-between group"
+                      >
+                        <div>
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-500 to-amber-400 text-white font-bold text-sm flex items-center justify-center shrink-0 shadow-xs shadow-amber-500/20 group-hover:scale-105 transition-transform">
+                                {initial}
+                              </div>
+                              <div className="min-w-0">
+                                <h3 className="text-sm font-bold text-slate-900 group-hover:text-amber-600 transition-colors truncate">
+                                  {cust.name}
+                                </h3>
+                                <p className="text-xs text-slate-500 font-medium flex items-center gap-1 mt-0.5">
+                                  <FiPhone size={11} className="text-slate-400" />
+                                  <span>{cust.phone}</span>
+                                </p>
+                              </div>
+                            </div>
+
+                            <span className="text-[10px] font-mono font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md border border-slate-200 shrink-0">
+                              {cust.customer_id}
+                            </span>
+                          </div>
+
+                          {cust.address && (
+                            <p className="text-[11px] text-slate-400 mt-2.5 flex items-center gap-1 line-clamp-1">
+                              <FiMapPin size={11} className="shrink-0" />
+                              <span className="truncate">{cust.address}</span>
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="mt-3.5 pt-2.5 border-t border-slate-100 flex items-center justify-between text-xs">
+                          <span className="text-[11px] text-slate-400">View Invoices</span>
+                          <span className="font-semibold text-amber-600 group-hover:translate-x-0.5 transition-transform">
+                            Open Ledger →
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
         </div>

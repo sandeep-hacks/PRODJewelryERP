@@ -109,9 +109,13 @@ class BillItemCreate(BaseModel):
     making_charges_value: Optional[float] = None
 
 class BillCreate(BaseModel):
-    customer_id: int
+    customer_id: Optional[int] = None
+    customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
+    customer_address: Optional[str] = None
+    customer_email: Optional[str] = None
     items: List[BillItemCreate]
-    apply_gst: Optional[bool] = True
+    apply_gst: Optional[bool] = False
     discount_amount: Optional[float] = 0.0
     discount_percentage: Optional[float] = 0.0
     paid_amount: Optional[float] = None
