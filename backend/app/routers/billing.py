@@ -115,6 +115,21 @@ async def create_bill(
             db.refresh(customer)
         else:
             raise HTTPException(status_code=400, detail="Customer name and phone number are required")
+    else:
+        # Update existing customer with any newly provided details
+        updated_cust = False
+        if bill.customer_name and bill.customer_name.strip() and customer.name != bill.customer_name.strip():
+            customer.name = bill.customer_name.strip()
+            updated_cust = True
+        if bill.customer_address and bill.customer_address.strip() and customer.address != bill.customer_address.strip():
+            customer.address = bill.customer_address.strip()
+            updated_cust = True
+        if bill.customer_email and bill.customer_email.strip() and customer.email != bill.customer_email.strip():
+            customer.email = bill.customer_email.strip()
+            updated_cust = True
+        if updated_cust:
+            db.commit()
+            db.refresh(customer)
     
     # Get today's gold rate
     today = datetime.utcnow().date()
@@ -219,10 +234,24 @@ async def create_bill(
                 detail=f"Insufficient stock for {jewellery.name}"
             )
         
-        # Calculate price based on metal type and purity
-        metal_type = (jewellery.metal_type or "Gold").lower()
-        effective_rate = get_effective_metal_rate(gold_rate, metal_type, jewellery.purity)
-        gold_value = jewellery.weight * effective_rate
+        # Calculate price based on metal type and purity, prioritizing user customized values
+        item_weight = float(item.weight) if (item.weight is not None and float(item.weight) > 0) else float(jewellery.weight or 0.0)
+        
+        metal_type = (item.metal_type or jewellery.metal_type or "Gold").lower()
+        if metal_type == 'silver':
+            item_purity = 0.0
+        else:
+            item_purity = float(item.purity) if (item.purity is not None and float(item.purity) > 0) else float(jewellery.purity or 22.0)
+
+        default_rate = get_effective_metal_rate(gold_rate, metal_type, item_purity)
+        if item.rate_per_gram is not None and float(item.rate_per_gram) > 0:
+            effective_rate = float(item.rate_per_gram)
+        elif item.rate is not None and float(item.rate) > 0:
+            effective_rate = float(item.rate)
+        else:
+            effective_rate = default_rate
+
+        gold_value = item_weight * effective_rate
 
         # Custom making charges (Fixed or Percentage)
         if item.making_charges_type == "percentage" and item.making_charges_value is not None:
@@ -230,21 +259,25 @@ async def create_bill(
         elif item.making_charges_value is not None:
             making_charge_val = float(item.making_charges_value)
         else:
-            making_charge_val = jewellery.weight * jewellery.making_charges
+            making_charge_val = item_weight * float(jewellery.making_charges or 0.0)
 
-        wastage_charge_val = gold_value * (jewellery.wastage_percentage / 100.0)
+        wastage_pct = float(item.wastage_percentage) if item.wastage_percentage is not None else float(jewellery.wastage_percentage or 0.0)
+        wastage_charge_val = gold_value * (wastage_pct / 100.0)
+        
         item_unit_subtotal = gold_value + making_charge_val + wastage_charge_val
-        item_subtotal = item_unit_subtotal * item.quantity
+        item_subtotal = float(item.total) if (item.total is not None and float(item.total) > 0) else (item_unit_subtotal * item.quantity)
+
+        item_name = (item.name or jewellery.name or "Jewellery Item").strip()
 
         # Create bill item
         db_bill_item = BillItem(
             bill_id=db_bill.id,
             jewellery_id=jewellery.id,
-            item_name=jewellery.name,
+            item_name=item_name,
             is_manual=False,
             quantity=item.quantity,
-            weight=jewellery.weight * item.quantity,
-            purity=jewellery.purity,
+            weight=item_weight * item.quantity,
+            purity=item_purity,
             rate_per_gram=effective_rate,
             making_charges=making_charge_val * item.quantity,
             wastage_charges=wastage_charge_val * item.quantity,
@@ -421,34 +454,45 @@ def generate_pdf_invoice(bill_id: int, db: Session):
     c.rect(x_left, y_bot, box_w, box_h, stroke=1, fill=0)
     
     # 2. Header Area
-    sep1_y = 746.0
+    sep1_y = 728.0
     
     # 2a. Diamond Logo on top left
     if os.path.exists(DIAMOND_ICON_PATH):
-        c.drawImage(DIAMOND_ICON_PATH, 36, 752, width=62, height=62, mask='auto')
+        c.drawImage(DIAMOND_ICON_PATH, 36, 742, width=58, height=58, mask='auto')
         
-    # 2b. Central Shop Header Name "श्रवण ज्वेलर्स" + Slogan
+    # 2b. Central Shop Header Name "श्रवण ज्वेलर्स" + Slogan + Shop Address (Large & Prominent)
     dev_font = "Devanagari" if "Devanagari" in pdfmetrics.getRegisteredFontNames() else "Helvetica-Bold"
     if os.path.exists(HEADER_LOGO_PATH):
-        header_w = 280.0
-        header_h = 56.0
-        c.drawImage(HEADER_LOGO_PATH, (page_w - header_w) / 2.0, 754, width=header_w, height=header_h, mask='auto')
+        header_w = 270.0
+        header_h = 52.0
+        c.drawImage(HEADER_LOGO_PATH, (page_w - header_w) / 2.0, 755, width=header_w, height=header_h, mask='auto')
+        c.setFont(dev_font, 10.0)
+        c.setFillColor(colors.HexColor('#111827'))
+        c.drawCentredString(page_w / 2.0, 738, "मेन रोड, नियर शिव मंदिर, रितुडीह, बोकारो, झारखंड")
     else:
         c.setFillColor(colors.HexColor('#78350F'))
-        c.setFont(dev_font, 22)
-        c.drawCentredString(page_w / 2.0, 780, "श्रवण ज्वेलर्स")
-        c.setFont("Helvetica-Bold", 8)
+        c.setFont(dev_font, 20)
+        c.drawCentredString(page_w / 2.0, 786, "श्रवण ज्वेलर्स")
+        c.setFont("Helvetica-Bold", 7.5)
         c.setFillColor(colors.HexColor('#B45309'))
-        c.drawCentredString(page_w / 2.0, 764, "TRUST  |  PURITY  |  TIMELESS BEAUTY")
+        c.drawCentredString(page_w / 2.0, 771, "TRUST  |  PURITY  |  TIMELESS BEAUTY")
+        c.setFont(dev_font, 10.0)
+        c.setFillColor(colors.HexColor('#111827'))
+        c.drawCentredString(page_w / 2.0, 752, "मेन रोड, नियर शिव मंदिर, रितुडीह, बोकारो, झारखंड")
         
     # 2c. Top Right Header text
     c.setFillColor(colors.HexColor('#111827'))
-    c.setFont("Helvetica-Bold", 11)
-    c.drawRightString(x_right - 14, 804, "INVOICE")
-    c.setFont("Helvetica", 8.5)
-    c.setFillColor(colors.HexColor('#374151'))
-    c.drawRightString(x_right - 14, 789, "GSTIN : 36XXXXXXXX0X")
-    c.drawRightString(x_right - 14, 775, "Mob : 7488468139")
+    c.setFont("Helvetica-Bold", 10.5)
+    c.drawRightString(x_right - 14, 802, "INVOICE")
+    c.setFont("Helvetica", 8.0)
+    c.setFillColor(colors.HexColor('#4B5563'))
+    c.drawRightString(x_right - 14, 788, "GSTIN : 36XXXXXXXX0X")
+    c.setFont("Helvetica-Bold", 8.0)
+    c.setFillColor(colors.HexColor('#1F2937'))
+    c.drawRightString(x_right - 14, 774, "Mob : 9835864673, 6205298826")
+    c.setFont("Helvetica", 7.5)
+    c.setFillColor(colors.HexColor('#6B7280'))
+    c.drawRightString(x_right - 14, 760, "Bokaro, Jharkhand")
     
     # Horizontal Divider 1
     c.setStrokeColor(colors.HexColor('#9CA3AF'))
@@ -456,7 +500,7 @@ def generate_pdf_invoice(bill_id: int, db: Session):
     c.line(x_left, sep1_y, x_right, sep1_y)
     
     # 3. Bill To / Invoice Details Box
-    sep2_y = 668.0
+    sep2_y = 642.0
     x_mid = 328.0
     
     # Vertical divider line
@@ -468,16 +512,48 @@ def generate_pdf_invoice(bill_id: int, db: Session):
     cust_name = (customer.name if customer else "Walk-in Customer")
     cust_phone = (customer.phone if customer and customer.phone else "-")
     cust_id = (customer.customer_id if customer and customer.customer_id else "-")
+    cust_address = (customer.address.strip() if customer and customer.address else "")
+    cust_email = (customer.email.strip() if customer and customer.email else "")
     has_hindi_cust = any(ord(ch) > 127 for ch in cust_name)
+    has_hindi_addr = any(ord(ch) > 127 for ch in cust_address)
     
-    c.setFont("Helvetica-Bold", 9)
+    c.setFont("Helvetica-Bold", 8.0)
+    c.setFillColor(colors.HexColor('#6B7280'))
+    c.drawString(32, 714, "BILL TO (CUSTOMER DETAILS)")
+    
+    c.setFont(dev_font if has_hindi_cust else "Helvetica-Bold", 9.5)
     c.setFillColor(colors.HexColor('#111827'))
-    c.drawString(32, 730, "Bill To :")
-    c.setFont(dev_font if has_hindi_cust else "Helvetica-Bold", 9)
-    c.drawString(32, 715, cust_name)
-    c.setFont("Helvetica", 8.5)
-    c.drawString(32, 700, f"Phone : {cust_phone}")
-    c.drawString(32, 685, f"Customer ID : {cust_id}")
+    c.drawString(32, 699, cust_name)
+    
+    c.setFont("Helvetica-Bold", 8.0)
+    c.setFillColor(colors.HexColor('#374151'))
+    c.drawString(32, 685, "Phone : ")
+    c.setFont("Helvetica", 8.0)
+    c.drawString(68, 685, cust_phone)
+    
+    c.setFont("Helvetica-Bold", 8.0)
+    c.drawString(175, 685, "Cust ID : ")
+    c.setFont("Helvetica", 8.0)
+    c.drawString(215, 685, cust_id)
+    
+    c.setFont("Helvetica-Bold", 8.0)
+    c.setFillColor(colors.HexColor('#374151'))
+    c.drawString(32, 671, "Address : ")
+    addr_val = cust_address if cust_address else "Local / Counter Sale"
+    c.setFont(dev_font if has_hindi_addr else "Helvetica", 8.0)
+    c.setFillColor(colors.HexColor('#1F2937'))
+    c.drawString(75, 671, addr_val[:48])
+    
+    if cust_email:
+        c.setFont("Helvetica-Bold", 8.0)
+        c.setFillColor(colors.HexColor('#374151'))
+        c.drawString(32, 657, "Email : ")
+        c.setFont("Helvetica", 8.0)
+        c.drawString(68, 657, cust_email[:38])
+    else:
+        c.setFont("Helvetica-Oblique", 7.5)
+        c.setFillColor(colors.HexColor('#9CA3AF'))
+        c.drawString(32, 657, "Retail Jewellery Tax Invoice")
     
     # Invoice Details (Right)
     b_date_str = bill.bill_date.strftime('%Y-%m-%d %H:%M') if bill.bill_date else datetime.now().strftime('%Y-%m-%d %H:%M')
@@ -502,40 +578,45 @@ def generate_pdf_invoice(bill_id: int, db: Session):
     
     c.setFont("Helvetica-Bold", 8.5)
     c.setFillColor(colors.HexColor('#111827'))
-    c.drawString(342, 730, "Invoice No : ")
+    c.drawString(342, 714, "Invoice No : ")
     inv_label_w = c.stringWidth("Invoice No : ", "Helvetica-Bold", 8.5)
     
     # Red Highlight for Invoice Number
     c.setFont("Helvetica-Bold", 8.5)
     c.setFillColor(colors.HexColor('#B91C1C'))
-    c.drawString(342 + inv_label_w, 730, str(bill.invoice_number))
+    c.drawString(342 + inv_label_w, 714, str(bill.invoice_number))
     
     c.setFillColor(colors.HexColor('#111827'))
-    c.setFont("Helvetica-Bold", 8.5)
-    c.drawString(342, 715, "Date")
-    c.setFont("Helvetica", 8.5)
-    c.drawString(425, 715, f": {b_date_str}")
+    c.setFont("Helvetica-Bold", 8.0)
+    c.drawString(342, 699, "Date & Time")
+    c.setFont("Helvetica", 8.0)
+    c.drawString(425, 699, f": {b_date_str}")
     
-    c.setFont("Helvetica-Bold", 8.5)
-    c.drawString(342, 700, "Payment Method")
-    c.setFont("Helvetica", 8.5)
-    c.drawString(425, 700, f": {p_method_str}")
+    c.setFont("Helvetica-Bold", 8.0)
+    c.drawString(342, 685, "Payment Method")
+    c.setFont("Helvetica", 8.0)
+    c.drawString(425, 685, f": {p_method_str}")
     
-    c.setFont("Helvetica-Bold", 8.5)
-    c.drawString(342, 685, "Payment Status")
+    c.setFont("Helvetica-Bold", 8.0)
+    c.drawString(342, 671, "Payment Status")
     if bill.payment_status == 'partial':
-        c.setFont("Helvetica-Bold", 8.5)
+        c.setFont("Helvetica-Bold", 8.0)
         c.setFillColor(colors.HexColor('#B91C1C'))
-        c.drawString(425, 685, f": PARTIAL (Due: Rs. {pending_amt:,.2f})")
+        c.drawString(425, 671, f": PARTIAL (Due: Rs. {pending_amt:,.2f})")
     elif bill.payment_status == 'unpaid':
-        c.setFont("Helvetica-Bold", 8.5)
+        c.setFont("Helvetica-Bold", 8.0)
         c.setFillColor(colors.HexColor('#B91C1C'))
-        c.drawString(425, 685, f": FULL DUE (Due: Rs. {pending_amt:,.2f})")
+        c.drawString(425, 671, f": FULL DUE (Due: Rs. {pending_amt:,.2f})")
     else:
-        c.setFont("Helvetica-Bold", 8.5)
+        c.setFont("Helvetica-Bold", 8.0)
         c.setFillColor(colors.HexColor('#047857'))
-        c.drawString(425, 685, f": PAID")
+        c.drawString(425, 671, f": PAID")
+        
+    c.setFont("Helvetica-Bold", 8.0)
     c.setFillColor(colors.HexColor('#111827'))
+    c.drawString(342, 657, "Place of Supply")
+    c.setFont("Helvetica", 8.0)
+    c.drawString(425, 657, f": Jharkhand (20)")
     
     # Horizontal Divider 2
     c.setStrokeColor(colors.HexColor('#9CA3AF'))

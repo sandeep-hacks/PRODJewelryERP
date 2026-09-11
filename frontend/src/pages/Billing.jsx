@@ -288,6 +288,7 @@ const Billing = () => {
       jewellery_id: stock ? stock.id : null,
       name: name,
       quantity: qty,
+      weight: weight,
       item_details: {
         id: stock ? stock.id : null,
         name: name,
@@ -340,7 +341,12 @@ const Billing = () => {
         return prev;
       }
       
-      updated[index] = { ...item, quantity: newQty };
+      const unitTotal = item.quantity > 0 ? (item.total / item.quantity) : item.total;
+      updated[index] = { 
+        ...item, 
+        quantity: newQty,
+        total: unitTotal * newQty
+      };
       return updated;
     });
   };
@@ -468,27 +474,26 @@ const Billing = () => {
         customer_address: customerForm.address.trim() || undefined,
         customer_email: customerForm.email.trim() || undefined,
         items: selectedItems.map(i => {
-          if (i.is_manual) {
-            const details = i.item_details || {};
-            return {
-              is_manual: true,
-              name: i.name || details.name,
-              quantity: i.quantity,
-              metal_type: details.metal_type || 'Gold',
-              purity: details.purity || 0,
-              weight: details.weight || 0,
-              wastage_percentage: details.wastage_percentage || 0,
-              making_charges_type: i.making_type || 'fixed',
-              making_charges_value: Number(i.making_value || 0),
-              rate: Number(i.rate || 0),
-              total: Number(i.total || 0)
-            };
-          }
+          const details = i.item_details || {};
+          const itemWeight = Number(details.weight ?? i.weight) || 0;
+          const itemPurity = details.metal_type === 'Silver' ? 0 : (Number(details.purity) || 22);
+          const itemRate = Number(i.rate) || 0;
+          const itemTotal = Number(i.total) || 0;
+
           return {
-            jewellery_id: i.jewellery_id,
+            jewellery_id: i.jewellery_id || null,
+            is_manual: Boolean(i.is_manual),
+            name: (i.name || details.name || 'Jewellery Item').trim(),
             quantity: i.quantity,
-            making_charges_type: i.making_type,
-            making_charges_value: Number(i.making_value)
+            metal_type: details.metal_type || 'Gold',
+            purity: itemPurity,
+            weight: itemWeight,
+            wastage_percentage: Number(details.wastage_percentage) || 0,
+            making_charges_type: i.making_type || 'fixed',
+            making_charges_value: Number(i.making_value || 0),
+            rate: itemRate,
+            rate_per_gram: itemRate,
+            total: itemTotal
           };
         }),
         apply_gst: applyGst,
